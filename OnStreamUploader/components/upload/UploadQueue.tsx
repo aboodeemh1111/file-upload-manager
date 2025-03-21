@@ -1,5 +1,5 @@
-import React, { useCallback } from "react";
-import { StyleSheet, View, FlatList, Text } from "react-native";
+import React, { useCallback, useRef } from "react";
+import { StyleSheet, View, FlatList, Text, Platform } from "react-native";
 import { useUpload } from "@/context/UploadContext";
 import FileItem from "./FileItem";
 import { ThemedView } from "../ThemedView";
@@ -7,6 +7,15 @@ import { ThemedText } from "../ThemedText";
 import Colors from "@/constants/Colors";
 import { useColorScheme } from "@/components/useColorScheme";
 import { FileUpload } from "@/types/FileUpload";
+import Animated, { FadeIn, FadeOut, Layout } from "react-native-reanimated";
+
+// Check if running on web
+const isWeb = Platform.OS === "web";
+
+// Use conditional component based on platform
+const AnimatedFlatList = isWeb
+  ? FlatList // Use regular FlatList on web
+  : Animated.createAnimatedComponent(FlatList);
 
 const UploadQueue = () => {
   const { uploadQueue, completedUploads, reorderQueue } = useUpload();
@@ -16,9 +25,14 @@ const UploadQueue = () => {
   // Use memoized renderItem function to prevent re-renders
   const renderItem = useCallback(
     ({ item, index }: { item: FileUpload; index: number }) => (
-      <FileItem file={item} position={index} onReorder={reorderQueue} />
+      <FileItem
+        file={item}
+        position={index}
+        onReorder={reorderQueue}
+        isCompleted={completedUploads.includes(item)}
+      />
     ),
-    [reorderQueue]
+    [reorderQueue, completedUploads]
   );
 
   // Use stable key extractor
@@ -27,6 +41,15 @@ const UploadQueue = () => {
   // Debug logs
   console.log(`Rendering queue with ${uploadQueue.length} items`);
   console.log(`Completed uploads: ${completedUploads.length} items`);
+
+  // Create animation props conditionally
+  const animationProps = isWeb
+    ? {} // No animation props on web
+    : {
+        itemLayoutAnimation: Layout.springify(),
+        entering: FadeIn.duration(300),
+        exiting: FadeOut.duration(300),
+      };
 
   return (
     <View style={styles.container}>
@@ -37,11 +60,12 @@ const UploadQueue = () => {
             <ThemedText style={styles.emptyText}>No files in queue</ThemedText>
           </ThemedView>
         ) : (
-          <FlatList
+          <AnimatedFlatList
             data={uploadQueue}
             keyExtractor={keyExtractor}
             renderItem={renderItem}
             style={styles.list}
+            {...animationProps}
           />
         )}
       </View>
@@ -51,11 +75,12 @@ const UploadQueue = () => {
           <ThemedText style={styles.sectionTitle}>
             Completed Uploads ({completedUploads.length})
           </ThemedText>
-          <FlatList
+          <AnimatedFlatList
             data={completedUploads}
             keyExtractor={keyExtractor}
             renderItem={renderItem}
             style={styles.list}
+            {...animationProps}
           />
         </View>
       )}

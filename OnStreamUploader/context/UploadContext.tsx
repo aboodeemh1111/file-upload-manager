@@ -136,24 +136,35 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
         );
 
         if (data.status === "completed") {
-          // Move completed uploads to completedUploads array
-          setUploadQueue((prev) => {
-            const file = prev.find((f) => f.fileId === data.fileId);
-            if (file) {
-              // Add to completed uploads
-              setCompletedUploads((current) => [
-                ...current,
-                {
-                  ...file,
-                  status: "completed" as const,
-                  progress: 100,
-                },
-              ]);
-              // Remove from queue
-              return prev.filter((f) => f.fileId !== data.fileId);
-            }
-            return prev;
-          });
+          // Update the file status first to trigger animation
+          setUploadQueue((prev) =>
+            prev.map((file) =>
+              file.fileId === data.fileId
+                ? { ...file, status: "completed", progress: 100 }
+                : file
+            )
+          );
+
+          // Delay removal to allow animation to complete
+          setTimeout(() => {
+            setUploadQueue((prev) => {
+              const file = prev.find((f) => f.fileId === data.fileId);
+              if (file) {
+                // Add to completed uploads
+                setCompletedUploads((current) => [
+                  ...current,
+                  {
+                    ...file,
+                    status: "completed" as const,
+                    progress: 100,
+                  },
+                ]);
+                // Remove from queue
+                return prev.filter((f) => f.fileId !== data.fileId);
+              }
+              return prev;
+            });
+          }, 500); // Delay matches animation duration
         } else {
           // Update status for other statuses
           setUploadQueue((prev) =>
