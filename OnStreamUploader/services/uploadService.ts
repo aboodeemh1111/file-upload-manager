@@ -128,12 +128,13 @@ class UploadService {
       await this.uploadFile(new Blob([this.currentUpload.uri]), {
         fileId: this.currentUpload.fileId,
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Upload failed:", error);
 
       if (this.currentUpload) {
         this.currentUpload.status = "failed";
-        this.currentUpload.error = error.message;
+        this.currentUpload.error =
+          error instanceof Error ? error.message : String(error);
 
         // Retry logic
         if (this.currentUpload.retryCount < 3) {
@@ -242,6 +243,25 @@ class UploadService {
     }
     return false;
   }
+
+  updateProgress(fileId: string, progress: number) {
+    const file = this.uploadQueue.find((f) => f.fileId === fileId);
+    if (file) {
+      file.progress = progress;
+    }
+  }
+
+  completeUpload(fileId: string) {
+    this.removeFromQueue(fileId);
+  }
+
+  failUpload(fileId: string, errorMessage: string) {
+    const file = this.uploadQueue.find((f) => f.fileId === fileId);
+    if (file) {
+      file.status = "failed";
+      file.error = errorMessage;
+    }
+  }
 }
 
 export default new UploadService();
@@ -278,25 +298,69 @@ const app = initializeApp(firebaseConfig);
 const storage = getStorage(app);
 
 // Update the uploadFile function to use Firebase
-export const uploadFile = async (
-  file: FileUpload,
-  onProgress: (progress: number) => void,
-  onError: (error: Error) => void,
-  onComplete: (url: string) => void
-) => {
+export const uploadFile = async (file: FileUpload): Promise<string> => {
+  console.log(`Starting upload process for ${file.name}`);
+
   try {
-    console.log("Starting real upload to Firebase for:", file.name);
+    console.log(`Beginning Firebase upload for ${file.name}`);
 
-    // Get the file data as a blob
-    const response = await fetch(file.uri);
-    const blob = await response.blob();
+    // Start the real upload to Firebase
+    const downloadURL = await uploadToFirebase(file, (progress) => {
+      console.log(
+        `Firebase upload progress for ${file.name}: ${progress.toFixed(1)}%`
+      );
 
-    // Create a storage reference
-    const storageRef = ref(storage, `uploads/${file.fileId}-${file.name}`);
+      // Use the default export instead of uploadService
+      const uploadServiceInstance = require("./uploadService").default;
+      uploadServiceInstance.updateProgress(file.fileId, progress);
 
-    // Start the upload
-    const uploadTask = uploadBytesResumable(storageRef, blob);
+      // Notify listeners about progress
+      notifyProgressListeners(file.fileId, progress);
+    });
 
+    console.log(`Firebase upload completed for ${file.name}`);
+
+    // Use the default export
+    const uploadServiceInstance = require("./uploadService").default;
+    uploadServiceInstance.completeUpload(file.fileId);
+
+    // Notify listeners about completion
+    notifyStatusListeners(file.fileId, "completed");
+
+    return downloadURL;
+  } catch (error: unknown) {
+    console.error(`Error in uploadFile for ${file.name}:`, error);
+
+    // Use the default export
+    const uploadServiceInstance = require("./uploadService").default;
+
+    // Check if error is an Error object with a message property
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    uploadServiceInstance.failUpload(file.fileId, errorMessage);
+
+    // Notify listeners about failure
+    notifyStatusListeners(file.fileId, "failed", errorMessage);
+
+    throw error;
+  }
+};
+
+// Add this function to your uploadService.ts file
+const uploadToFirebase = async (
+  file: FileUpload,
+  onProgress: (progress: number) => void
+): Promise<string> => {
+  // Get the file data as a blob
+  const response = await fetch(file.uri);
+  const blob = await response.blob();
+
+  // Create a storage reference
+  const storageRef = ref(storage, `uploads/${file.fileId}-${file.name}`);
+
+  // Start the upload
+  const uploadTask = uploadBytesResumable(storageRef, blob);
+
+  return new Promise((resolve, reject) => {
     // Listen for state changes, errors, and completion
     uploadTask.on(
       "state_changed",
@@ -304,24 +368,37 @@ export const uploadFile = async (
         // Get upload progress
         const progress =
           (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-        console.log(
-          `Firebase upload progress for ${file.name}: ${progress.toFixed(1)}%`
-        );
         onProgress(progress);
       },
       (error) => {
-        console.error("Firebase upload error:", error);
-        onError(error);
+        // Handle errors
+        reject(error);
       },
-      () => {
-        console.log("Firebase upload completed");
-        getDownloadURL(uploadTask.snapshot.ref).then((url) => {
-          onComplete(url);
-        });
+      async () => {
+        // Handle successful upload
+        const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+        resolve(downloadURL);
       }
     );
-  } catch (error: any) {
-    console.error("Firebase upload error:", error);
-    onError(error);
-  }
+  });
+};
+
+// Add these helper functions for notifying listeners
+const notifyProgressListeners = (fileId: string, progress: number) => {
+  websocketService.notifyListeners("upload_progress", {
+    fileId,
+    progress,
+  });
+};
+
+const notifyStatusListeners = (
+  fileId: string,
+  status: string,
+  error?: string
+) => {
+  websocketService.notifyListeners("upload_status", {
+    fileId,
+    status,
+    error,
+  });
 };

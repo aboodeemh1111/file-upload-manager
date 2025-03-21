@@ -1,27 +1,30 @@
-import React, { Component, ErrorInfo, ReactNode } from "react";
-import { View, Text, StyleSheet, Button } from "react-native";
+import React from "react";
+import { View, Text, StyleSheet } from "react-native";
 
-interface Props {
-  children: ReactNode;
-}
-
-interface State {
+interface ErrorBoundaryState {
   hasError: boolean;
-  error: Error | null;
+  error?: Error;
 }
 
-export class ErrorBoundary extends Component<Props, State> {
-  constructor(props: Props) {
+interface ErrorBoundaryProps {
+  children: React.ReactNode;
+}
+
+export class ErrorBoundary extends React.Component<
+  ErrorBoundaryProps,
+  ErrorBoundaryState
+> {
+  constructor(props: ErrorBoundaryProps) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false };
   }
 
-  static getDerivedStateFromError(error: Error): State {
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
     return { hasError: true, error };
   }
 
-  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error("Uncaught error:", error, errorInfo);
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
+    console.error("Error caught by ErrorBoundary:", error, errorInfo);
   }
 
   render() {
@@ -29,11 +32,7 @@ export class ErrorBoundary extends Component<Props, State> {
       return (
         <View style={styles.container}>
           <Text style={styles.title}>Something went wrong</Text>
-          <Text style={styles.error}>{this.state.error?.toString()}</Text>
-          <Button
-            title="Try again"
-            onPress={() => this.setState({ hasError: false, error: null })}
-          />
+          <Text style={styles.message}>{this.state.error?.message}</Text>
         </View>
       );
     }
@@ -54,9 +53,8 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     marginBottom: 10,
   },
-  error: {
-    color: "red",
-    marginBottom: 20,
+  message: {
+    fontSize: 16,
     textAlign: "center",
   },
 });

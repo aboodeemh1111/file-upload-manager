@@ -3,7 +3,7 @@ import { View, StyleSheet } from "react-native";
 import * as Progress from "react-native-progress";
 import Colors from "@/constants/Colors";
 import { useColorScheme } from "@/components/useColorScheme";
-import { ThemedText } from "@/components/ThemedText";
+import { ThemedText } from "../ThemedText";
 
 // Add type definition for the ProgressIndicator props
 interface ProgressIndicatorProps {
@@ -30,8 +30,8 @@ const ProgressIndicator: React.FC<ProgressIndicatorProps> = ({
         progress={normalizedProgress}
         width={null}
         height={8}
-        color={status === "paused" ? colors.warning : colors.tint}
-        unfilledColor={colors.background}
+        color={status === "paused" ? colors.warning : colors.primary}
+        unfilledColor={colorScheme === "dark" ? "#333" : "#eee"}
         borderWidth={0}
         borderRadius={4}
         style={styles.progressBar}

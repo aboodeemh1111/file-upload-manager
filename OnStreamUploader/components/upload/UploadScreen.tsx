@@ -1,34 +1,37 @@
 import React from "react";
 import { StyleSheet, View, Text, TouchableOpacity } from "react-native";
 import { useUpload } from "@/context/UploadContext";
-import UploadQueue from "@/components/upload/UploadQueue";
+import UploadQueue from "./UploadQueue";
+import { ThemedView } from "../ThemedView";
+import { ThemedText } from "../ThemedText";
 import { Ionicons } from "@expo/vector-icons";
 import Colors from "@/constants/Colors";
 import { useColorScheme } from "@/components/useColorScheme";
+import { StatusBar } from "expo-status-bar";
 
-export default function Index() {
+export default function UploadScreen() {
   const { pickImage, pickDocument, pickVideo, isConnected } = useUpload();
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme];
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
+    <ThemedView style={styles.container}>
+      <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />
+
       <View style={styles.header}>
-        <Text style={[styles.title, { color: colors.text }]}>
-          OnStream Uploader
-        </Text>
+        <ThemedText style={styles.title}>OnStream Uploader</ThemedText>
         <View style={styles.connectionStatus}>
           <View
             style={[
               styles.statusIndicator,
               {
-                backgroundColor: isConnected ? colors.success : colors.error,
+                backgroundColor: isConnected ? "#4CAF50" : "#F44336",
               },
             ]}
           />
-          <Text style={[styles.statusText, { color: colors.text }]}>
+          <ThemedText style={styles.statusText}>
             {isConnected ? "Connected" : "Offline"}
-          </Text>
+          </ThemedText>
         </View>
       </View>
 
@@ -59,7 +62,7 @@ export default function Index() {
           <Text style={styles.buttonText}>Upload Files</Text>
         </TouchableOpacity>
       </View>
-    </View>
+    </ThemedView>
   );
 }
 

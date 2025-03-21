@@ -35,7 +35,12 @@ type GestureContext = {
   startY: number;
 };
 
-const FileItem: React.FC<FileItemProps> = ({ file, isCompleted = false }) => {
+const FileItem: React.FC<FileItemProps> = ({
+  file,
+  isCompleted = false,
+  position,
+  onReorder,
+}) => {
   const {
     removeFromQueue,
     cancelUpload,
@@ -150,7 +155,7 @@ const FileItem: React.FC<FileItemProps> = ({ file, isCompleted = false }) => {
       onGestureEvent={panGestureEvent}
       enabled={!isCompleted && file.status !== "uploading"}
     >
-      <Animated.View style={[animatedStyle]}>
+      <Animated.View style={[styles.container, animatedStyle]}>
         <ThemedView
           style={{
             ...styles.container,

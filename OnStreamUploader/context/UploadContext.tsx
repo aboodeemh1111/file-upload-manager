@@ -119,33 +119,41 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
     const unsubscribe = websocketService.addListener(
       "upload_status",
       (data: UploadStatusData) => {
+        console.log(
+          `Received status update for ${data.fileId}: ${data.status}`
+        );
+
         if (data.status === "completed") {
-          // Find the file in the queue
-          const file = uploadQueue.find((f) => f.fileId === data.fileId);
-          if (file) {
-            // Update the file status
-            const updatedFile = {
-              ...file,
-              status: "completed" as const,
-              progress: 100,
-            };
-
-            // Remove from active queue
-            setUploadQueue((prev) =>
-              prev.filter((f) => f.fileId !== data.fileId)
-            );
-
-            // Add to completed uploads
-            setCompletedUploads((prev) => [...prev, updatedFile]);
-          }
+          // Move completed uploads to completedUploads array
+          setUploadQueue((prev) => {
+            const file = prev.find((f) => f.fileId === data.fileId);
+            if (file) {
+              // Add to completed uploads
+              setCompletedUploads((current) => [
+                ...current,
+                {
+                  ...file,
+                  status: "completed" as const,
+                  progress: 100,
+                },
+              ]);
+              // Remove from queue
+              return prev.filter((f) => f.fileId !== data.fileId);
+            }
+            return prev;
+          });
         } else {
-          // Update the file status in the queue
+          // Update status for other statuses
           setUploadQueue((prev) =>
             prev.map((file) =>
               file.fileId === data.fileId
                 ? {
                     ...file,
-                    status: data.status as any,
+                    status: data.status as
+                      | "uploading"
+                      | "queued"
+                      | "paused"
+                      | "failed",
                     error: data.error || null,
                   }
                 : file
@@ -185,42 +193,26 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
 
       console.log("Starting upload for file:", file.name);
 
-      await uploadFile(
-        file,
-        (progress) => {
-          console.log(`Upload progress for ${file.name}: ${progress}%`);
-          // Update progress
-          setUploadQueue((prev) =>
-            prev.map((f) => (f.fileId === file.fileId ? { ...f, progress } : f))
-          );
+      const url = await uploadFile(file);
+      console.log(`Upload complete for ${file.name}, URL:`, url);
+      setCompletedUploads((prev) => [
+        ...prev,
+        {
+          ...file,
+          status: "completed" as const,
+          progress: 100,
         },
-        (error) => {
-          console.error("Upload error:", error);
-          // Handle error
-          setUploadQueue((prev) =>
-            prev.map((f) =>
-              f.fileId === file.fileId
-                ? { ...f, status: "failed", error: error.message }
-                : f
-            )
-          );
-        },
-        (url) => {
-          console.log("Upload complete, URL:", url);
-          // Handle completion
-          setUploadQueue((prev) =>
-            prev.filter((f) => f.fileId !== file.fileId)
-          );
-
-          // Add to completed uploads
-          setCompletedUploads((prev) => [
-            ...prev,
-            { ...file, status: "completed", progress: 100 },
-          ]);
-        }
+      ]);
+      setUploadQueue((prev) => prev.filter((f) => f.fileId !== file.fileId));
+    } catch (error: any) {
+      console.error(`Upload error for ${file.name}:`, error);
+      setUploadQueue((prev) =>
+        prev.map((f) =>
+          f.fileId === file.fileId
+            ? { ...f, status: "failed" as const, error: error.message }
+            : f
+        )
       );
-    } catch (error) {
-      console.error("Error in uploadFileToFirebase:", error);
     }
   };
 
@@ -250,56 +242,27 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
 
     // Then start uploads
     fileUploads.forEach(async (file) => {
-      console.log("Starting upload for file:", file.name);
-
-      // Update status to uploading
-      setUploadQueue((prev) =>
-        prev.map((f) =>
-          f.fileId === file.fileId ? { ...f, status: "uploading" } : f
-        )
-      );
-
       try {
-        await uploadFile(
-          file,
-          (progress) => {
-            console.log(`Upload progress for ${file.name}: ${progress}%`);
-            // Update progress
-            setUploadQueue((prev) =>
-              prev.map((f) =>
-                f.fileId === file.fileId ? { ...f, progress } : f
-              )
-            );
-          },
-          (error) => {
-            console.error(`Upload error for ${file.name}:`, error);
-            // Update status to failed
-            setUploadQueue((prev) =>
-              prev.map((f) =>
-                f.fileId === file.fileId
-                  ? { ...f, status: "failed", error: error.message }
-                  : f
-              )
-            );
-          },
-          (url) => {
-            console.log(`Upload complete for ${file.name}, URL:`, url);
-            // Move to completed uploads
-            const completedFile = {
-              ...file,
-              status: "completed" as const,
-              progress: 100,
-            };
-            setCompletedUploads((prev) => [...prev, completedFile]);
-
-            // Remove from queue
-            setUploadQueue((prev) =>
-              prev.filter((f) => f.fileId !== file.fileId)
-            );
-          }
+        // Update status to uploading
+        setUploadQueue((prev) =>
+          prev.map((f) =>
+            f.fileId === file.fileId
+              ? { ...f, status: "uploading" as const }
+              : f
+          )
         );
-      } catch (error) {
-        console.error(`Error initiating upload for ${file.name}:`, error);
+
+        // Call uploadFile with just the file parameter
+        await uploadFileToFirebase(file);
+      } catch (error: any) {
+        console.error(`Upload error for ${file.name}:`, error);
+        setUploadQueue((prev) =>
+          prev.map((f) =>
+            f.fileId === file.fileId
+              ? { ...f, status: "failed" as const, error: error.message }
+              : f
+          )
+        );
       }
     });
 
