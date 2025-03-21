@@ -11,10 +11,16 @@ import FilePicker from "@/components/upload/FilePicker";
 import FileItem from "@/components/upload/FileItem";
 import { useUpload } from "@/context/UploadContext";
 import { IconSymbol } from "@/components/ui/IconSymbol";
+import { router } from "expo-router";
+import { ThemedText } from "@/components/ThemedText";
+import Colors from "@/constants/Colors";
+import { useColorScheme } from "@/components/useColorScheme";
 
 export default function UploadScreen() {
   const { uploadQueue, completedUploads } = useUpload();
   const [showCompleted, setShowCompleted] = useState(false);
+  const colorScheme = useColorScheme();
+  const colors = Colors[colorScheme];
 
   return (
     <View style={styles.container}>
@@ -72,6 +78,18 @@ export default function UploadScreen() {
             />
           ))}
       </View>
+
+      {uploadQueue.length > 0 && (
+        <TouchableOpacity
+          style={styles.viewQueueButton}
+          onPress={() => router.navigate("/(tabs)/queue")}
+        >
+          <ThemedText style={styles.viewQueueButtonText}>
+            View Upload Queue ({uploadQueue.length})
+          </ThemedText>
+          <IconSymbol name="chevron-forward" size={20} color={colors.primary} />
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -123,5 +141,19 @@ const styles = StyleSheet.create({
     marginTop: 8,
     fontSize: 16,
     color: "#757575",
+  },
+  viewQueueButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.1)",
+  },
+  viewQueueButtonText: {
+    fontWeight: "600",
+    marginRight: 8,
   },
 });

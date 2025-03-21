@@ -1,9 +1,8 @@
-import React from "react";
-import { View, StyleSheet } from "react-native";
+import React, { useEffect, useRef } from "react";
+import { View, StyleSheet, Text } from "react-native";
 import * as Progress from "react-native-progress";
 import Colors from "@/constants/Colors";
 import { useColorScheme } from "@/components/useColorScheme";
-import { ThemedText } from "../ThemedText";
 
 // Add type definition for the ProgressIndicator props
 interface ProgressIndicatorProps {
@@ -17,28 +16,53 @@ const ProgressIndicator: React.FC<ProgressIndicatorProps> = ({
 }) => {
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme];
+  const prevProgressRef = useRef(progress);
+  const animationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Make sure progress is a number between 0 and 1
-  const normalizedProgress = Math.min(Math.max(progress / 100, 0), 1);
+  // Log when progress changes
+  useEffect(() => {
+    console.log(`Rendering progress bar: ${progress}% (${status})`);
+    prevProgressRef.current = progress;
 
-  console.log(`Rendering progress bar: ${progress}% (${normalizedProgress})`);
+    // Clear any existing timeout
+    if (animationTimeoutRef.current) {
+      clearTimeout(animationTimeoutRef.current);
+    }
 
-  // Always show progress for uploading files
+    // If progress is 100%, keep the progress bar visible for a moment
+    if (progress === 100) {
+      animationTimeoutRef.current = setTimeout(() => {
+        // This timeout will allow the progress bar to remain visible
+        console.log("Progress bar completion animation finished");
+      }, 1000);
+    }
+
+    return () => {
+      if (animationTimeoutRef.current) {
+        clearTimeout(animationTimeoutRef.current);
+      }
+    };
+  }, [progress, status]);
+
+  const getProgressColor = () => {
+    if (status === "paused") return colors.warning;
+    if (status === "failed") return colors.error;
+    return colors.primary;
+  };
+
   return (
     <View style={styles.container}>
       <Progress.Bar
-        progress={normalizedProgress}
+        progress={progress / 100}
         width={null}
         height={8}
-        color={status === "paused" ? colors.warning : colors.primary}
-        unfilledColor={colorScheme === "dark" ? "#333" : "#eee"}
+        color={getProgressColor()}
+        unfilledColor={`${getProgressColor()}20`}
         borderWidth={0}
         borderRadius={4}
         style={styles.progressBar}
       />
-      <ThemedText style={styles.progressText}>
-        {Math.round(progress)}%
-      </ThemedText>
+      <Text style={styles.progressText}>{Math.round(progress)}%</Text>
     </View>
   );
 };
@@ -46,17 +70,21 @@ const ProgressIndicator: React.FC<ProgressIndicatorProps> = ({
 const styles = StyleSheet.create({
   container: {
     width: "100%",
-    marginVertical: 8,
+    marginVertical: 4,
     flexDirection: "row",
     alignItems: "center",
   },
   progressBar: {
     flex: 1,
+    borderRadius: 4,
   },
   progressText: {
     marginLeft: 8,
     fontSize: 12,
     fontWeight: "bold",
+    color: "#666",
+    width: 40,
+    textAlign: "right",
   },
 });
 

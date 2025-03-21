@@ -259,6 +259,29 @@ class WebSocketService {
   listenForQueueUpdates(callback: (queue: FileUpload[]) => void) {
     return this.addListener("queue_update", callback);
   }
+
+  updateFileStatus(fileId: string, status: string, error?: string) {
+    this.notifyListeners("upload_status", {
+      fileId,
+      status,
+      error,
+    });
+  }
+
+  updateUploadProgress(fileId: string, progress: number) {
+    this.notifyListeners("upload_progress", {
+      fileId,
+      progress,
+    });
+  }
+
+  // Add a method to handle file progress updates if it doesn't exist
+  notifyUploadProgress(fileId: string, progress: number) {
+    this.notifyListeners("upload_progress", {
+      fileId,
+      progress,
+    });
+  }
 }
 
 export default new WebSocketService();

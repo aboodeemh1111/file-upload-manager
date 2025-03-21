@@ -1,5 +1,11 @@
-import React, { useCallback } from "react";
-import { StyleSheet, View, TouchableOpacity, Pressable } from "react-native";
+import React, { useCallback, useEffect, useState } from "react";
+import {
+  StyleSheet,
+  View,
+  TouchableOpacity,
+  Pressable,
+  Text,
+} from "react-native";
 import { ThemedText } from "../ThemedText";
 import { ThemedView } from "../ThemedView";
 import ProgressIndicator from "./ProgressIndicator";
@@ -28,6 +34,9 @@ interface FileItemProps {
   isCompleted?: boolean;
   position?: number;
   onReorder?: (fileId: string, newPosition: number) => void;
+  onPause?: () => void;
+  onResume?: () => void;
+  onCancel?: () => void;
 }
 
 // Add this type definition for the gesture context
@@ -40,7 +49,30 @@ const FileItem: React.FC<FileItemProps> = ({
   isCompleted = false,
   position,
   onReorder,
+  onPause,
+  onResume,
+  onCancel,
 }) => {
+  // Add state to track upload status independently
+  const [uploadStatus, setUploadStatus] = useState({
+    progress: file.progress,
+    status: file.status,
+    lastUpdated: new Date(),
+  });
+
+  // Update the status when file changes
+  useEffect(() => {
+    setUploadStatus({
+      progress: file.progress,
+      status: file.status,
+      lastUpdated: new Date(),
+    });
+
+    console.log(
+      `FileItem status updated: ${file.name}, progress: ${file.progress}%, status: ${file.status}`
+    );
+  }, [file.progress, file.status]);
+
   const {
     removeFromQueue,
     cancelUpload,
@@ -224,7 +256,22 @@ const FileItem: React.FC<FileItemProps> = ({
                 )}
               </View>
 
+              {/* Add separate status indicator */}
               {file.status === "uploading" && (
+                <View style={styles.statusIndicatorContainer}>
+                  <Text style={styles.statusIndicatorText}>
+                    Upload Status: {uploadStatus.status} (
+                    {uploadStatus.progress}%)
+                  </Text>
+                  <Text style={styles.statusIndicatorText}>
+                    Last Updated:{" "}
+                    {uploadStatus.lastUpdated.toLocaleTimeString()}
+                  </Text>
+                </View>
+              )}
+
+              {/* Original progress bar */}
+              {(file.status === "uploading" || file.status === "paused") && (
                 <View style={styles.progressContainer}>
                   <ProgressIndicator
                     progress={file.progress}
@@ -236,10 +283,40 @@ const FileItem: React.FC<FileItemProps> = ({
           </View>
 
           <View style={styles.actions}>
-            {!isCompleted && file.status === "uploading" && (
-              <Pressable onPress={handleCancel} style={styles.actionButton}>
-                <Ionicons name="close" size={20} color={colors.error} />
-              </Pressable>
+            {file.status === "uploading" && (
+              <TouchableOpacity
+                style={styles.actionButton}
+                onPress={onPause}
+                accessibilityLabel="Pause upload"
+              >
+                <IconSymbol name="pause" size={20} color={colors.primary} />
+              </TouchableOpacity>
+            )}
+
+            {file.status === "paused" && (
+              <TouchableOpacity
+                style={styles.actionButton}
+                onPress={onResume}
+                accessibilityLabel="Resume upload"
+              >
+                <IconSymbol name="play" size={20} color={colors.primary} />
+              </TouchableOpacity>
+            )}
+
+            {(file.status === "uploading" ||
+              file.status === "paused" ||
+              file.status === "queued") && (
+              <TouchableOpacity
+                style={styles.actionButton}
+                onPress={onCancel}
+                accessibilityLabel="Cancel upload"
+              >
+                <IconSymbol
+                  name="close-circle"
+                  size={20}
+                  color={colors.error}
+                />
+              </TouchableOpacity>
             )}
 
             {!isCompleted && file.status === "failed" && (
@@ -352,6 +429,18 @@ const styles = StyleSheet.create({
   },
   progressContainer: {
     marginBottom: 4,
+  },
+  // Add new styles for the status indicator
+  statusIndicatorContainer: {
+    marginTop: 4,
+    marginBottom: 4,
+    padding: 4,
+    backgroundColor: "rgba(0,0,0,0.05)",
+    borderRadius: 4,
+  },
+  statusIndicatorText: {
+    fontSize: 10,
+    color: "#666",
   },
 });
 

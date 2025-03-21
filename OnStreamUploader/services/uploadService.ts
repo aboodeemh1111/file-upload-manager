@@ -9,6 +9,7 @@ import {
   uploadBytesResumable,
   getDownloadURL,
 } from "firebase/storage";
+import { storage } from "../config/firebase";
 
 class UploadService {
   private uploadQueue: FileUpload[] = [];
@@ -283,70 +284,65 @@ export const mockUploadFile = async (file: File | Blob, metadata?: any) => {
   };
 };
 
-// Initialize Firebase with your config
-const firebaseConfig = {
-  apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: "onstream-6a46b.appspot.com", // Use your actual bucket
-  messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
-};
-
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-const storage = getStorage(app);
-
 // Update the uploadFile function to use Firebase
 export const uploadFile = async (file: FileUpload): Promise<string> => {
-  console.log(`Starting upload process for ${file.name}`);
-
   try {
-    // Check if file can be compressed
-    if (shouldCompress(file)) {
-      file = await compressFile(file);
-      console.log(`Compressed ${file.name} for upload`);
-    }
-
     console.log(`Beginning Firebase upload for ${file.name}`);
 
-    // Start the real upload to Firebase
-    const downloadURL = await uploadToFirebase(file, (progress) => {
-      console.log(
-        `Firebase upload progress for ${file.name}: ${progress.toFixed(1)}%`
-      );
+    // Create a reference to the storage location
+    const storageRef = ref(storage, `uploads/chunks/${file.fileId}-chunk-0`);
 
-      // Use the default export instead of uploadService
-      const uploadServiceInstance = require("./uploadService").default;
-      uploadServiceInstance.updateProgress(file.fileId, progress);
+    // Get the file data
+    const response = await fetch(file.uri);
+    const blob = await response.blob();
 
-      // Notify listeners about progress
-      notifyProgressListeners(file.fileId, progress);
-    });
+    // Create upload task
+    const uploadTask = uploadBytesResumable(storageRef, blob);
+
+    // Monitor upload progress
+    uploadTask.on(
+      "state_changed",
+      (snapshot) => {
+        // Calculate progress
+        const progress = Math.round(
+          (snapshot.bytesTransferred / snapshot.totalBytes) * 100
+        );
+
+        // Log progress
+        console.log(
+          `Firebase upload progress for ${file.name}: ${progress.toFixed(1)}%`
+        );
+
+        // Notify about progress via WebSocket
+        websocketService.notifyUploadProgress(file.fileId, progress);
+      },
+      (error) => {
+        // Handle unsuccessful uploads
+        console.error(`Firebase upload error for ${file.name}:`, error);
+        websocketService.updateFileStatus(file.fileId, "failed", error.message);
+        throw error;
+      }
+    );
+
+    // Wait for upload to complete
+    await uploadTask;
+
+    // Get download URL
+    const downloadURL = await getDownloadURL(storageRef);
 
     console.log(`Firebase upload completed for ${file.name}`);
 
-    // Use the default export
-    const uploadServiceInstance = require("./uploadService").default;
-    uploadServiceInstance.completeUpload(file.fileId);
-
-    // Notify listeners about completion
-    notifyStatusListeners(file.fileId, "completed");
+    // Update file status
+    websocketService.updateFileStatus(file.fileId, "completed");
 
     return downloadURL;
   } catch (error: unknown) {
-    console.error(`Error in uploadFile for ${file.name}:`, error);
-
-    // Use the default export
-    const uploadServiceInstance = require("./uploadService").default;
-
-    // Check if error is an Error object with a message property
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    uploadServiceInstance.failUpload(file.fileId, errorMessage);
-
-    // Notify listeners about failure
-    notifyStatusListeners(file.fileId, "failed", errorMessage);
-
+    console.error(`Error uploading ${file.name}:`, error);
+    websocketService.updateFileStatus(
+      file.fileId,
+      "failed",
+      error instanceof Error ? error.message : String(error)
+    );
     throw error;
   }
 };
@@ -499,4 +495,94 @@ const compressFile = async (file: FileUpload): Promise<FileUpload> => {
 
   // For other file types, you'd use appropriate compression techniques
   return file;
+};
+
+// Modify uploadService.ts to simulate slower uploads in development
+let uploadQueue: FileUpload[] = [];
+let isUploading = false;
+
+// Add artificial delay for progress updates in development
+const SIMULATE_SLOW_UPLOAD = process.env.NODE_ENV === "development";
+const PROGRESS_STEPS = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100];
+const STEP_DELAY = 1000; // ms between progress updates
+
+// Process the upload queue
+const processQueue = async () => {
+  if (isUploading || uploadQueue.length === 0) return;
+
+  isUploading = true;
+  const nextFile = uploadQueue.find((file) => file.status === "queued");
+
+  if (!nextFile) {
+    isUploading = false;
+    return;
+  }
+
+  try {
+    console.log(`Starting upload for file: ${nextFile.name}`);
+
+    // Update file status to uploading
+    nextFile.status = "uploading";
+    nextFile.progress = 0;
+    websocketService.updateFileStatus(nextFile.fileId, "uploading");
+
+    // Start the upload process
+    if (SIMULATE_SLOW_UPLOAD) {
+      await simulateSlowUpload(nextFile);
+    } else {
+      await uploadFile(nextFile);
+    }
+
+    // Continue with next file
+    isUploading = false;
+    processQueue();
+  } catch (error) {
+    console.error(`Error uploading file ${nextFile.name}:`, error);
+
+    // Update file status to failed
+    uploadQueue = uploadQueue.map((file) =>
+      file.fileId === nextFile.fileId
+        ? { ...file, status: "failed", error: error.message }
+        : file
+    );
+
+    websocketService.updateFileStatus(nextFile.fileId, "failed", error.message);
+
+    // Continue with next file
+    isUploading = false;
+    processQueue();
+  }
+};
+
+// Simulate a slow upload with progress updates
+const simulateSlowUpload = async (file: FileUpload): Promise<void> => {
+  return new Promise(async (resolve, reject) => {
+    try {
+      console.log(`Simulating slow upload for ${file.name}`);
+
+      // Simulate progress updates
+      for (const progress of PROGRESS_STEPS) {
+        // Update progress
+        file.progress = progress;
+        console.log(`Upload progress for ${file.name}: ${progress}%`);
+
+        // Notify about progress
+        websocketService.updateUploadProgress(file.fileId, progress);
+
+        // Wait before next update
+        if (progress < 100) {
+          await new Promise((r) => setTimeout(r, STEP_DELAY));
+        }
+      }
+
+      // Mark as completed
+      file.status = "completed";
+      file.progress = 100;
+      websocketService.updateFileStatus(file.fileId, "completed");
+
+      resolve();
+    } catch (error) {
+      reject(error);
+    }
+  });
 };

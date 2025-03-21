@@ -45,6 +45,15 @@ export default function TabLayout() {
           ),
         }}
       />
+      <Tabs.Screen
+        name="queue"
+        options={{
+          title: "Queue",
+          tabBarIcon: ({ color }) => (
+            <IconSymbol name="list" color={color} size={28} />
+          ),
+        }}
+      />
     </Tabs>
   );
 }

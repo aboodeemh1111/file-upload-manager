@@ -58,6 +58,28 @@ export const useUpload = () => {
 const SERVER_URL = "http://localhost:3000";
 const WS_URL = "ws://localhost:3000";
 
+// Add this function to handle progress updates properly
+const handleUploadProgress = (
+  fileId: string,
+  progress: number,
+  uploadQueue: FileUpload[],
+  setUploadQueue: React.Dispatch<React.SetStateAction<FileUpload[]>>
+) => {
+  console.log(`Progress update for ${fileId}: ${progress}%`);
+
+  setUploadQueue((prev) =>
+    prev.map((file) =>
+      file.fileId === fileId
+        ? {
+            ...file,
+            progress,
+            status: progress === 100 ? "completed" : "uploading",
+          }
+        : file
+    )
+  );
+};
+
 export const UploadProvider: React.FC<{ children: ReactNode }> = ({
   children,
 }) => {
@@ -107,24 +129,23 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
   }, []);
 
   useEffect(() => {
-    // Listen for upload progress updates from Firebase
-    const unsubscribe = websocketService.addListener(
+    // Listen for upload progress updates
+    const unsubscribeProgress = websocketService.addListener(
       "upload_progress",
-      (data: UploadProgressData) => {
-        setUploadQueue((prev) =>
-          prev.map((file) =>
-            file.fileId === data.fileId
-              ? { ...file, progress: data.progress }
-              : file
-          )
+      (data: { fileId: string; progress: number }) => {
+        handleUploadProgress(
+          data.fileId,
+          data.progress,
+          uploadQueue,
+          setUploadQueue
         );
       }
     );
 
     return () => {
-      unsubscribe();
+      unsubscribeProgress();
     };
-  }, []);
+  }, [uploadQueue]);
 
   useEffect(() => {
     // Listen for upload status updates
@@ -135,27 +156,40 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
           `Received status update for ${data.fileId}: ${data.status}`
         );
 
+        // Only move to completed uploads when status is "completed" AND progress is 100%
         if (data.status === "completed") {
-          // Move completed uploads to completedUploads array
           setUploadQueue((prev) => {
-            const file = prev.find((f) => f.fileId === data.fileId);
-            if (file) {
-              // Add to completed uploads
-              setCompletedUploads((current) => [
-                ...current,
-                {
-                  ...file,
-                  status: "completed" as const,
-                  progress: 100,
-                },
-              ]);
-              // Remove from queue
-              return prev.filter((f) => f.fileId !== data.fileId);
+            const fileIndex = prev.findIndex((f) => f.fileId === data.fileId);
+            if (fileIndex !== -1) {
+              const file = prev[fileIndex];
+
+              // Only move to completed if progress is 100%
+              if (file.progress === 100) {
+                // Add to completed uploads
+                setCompletedUploads((current) => [
+                  ...current,
+                  {
+                    ...file,
+                    status: "completed" as const,
+                    progress: 100,
+                  },
+                ]);
+
+                // Remove from queue only after adding to completed
+                return prev.filter((f) => f.fileId !== data.fileId);
+              }
+
+              // Otherwise just update the status
+              return prev.map((f) =>
+                f.fileId === data.fileId
+                  ? { ...f, status: "completed" as const }
+                  : f
+              );
             }
             return prev;
           });
         } else {
-          // Update status for other statuses
+          // For all other statuses, just update the status in the queue
           setUploadQueue((prev) =>
             prev.map((file) =>
               file.fileId === data.fileId
@@ -472,6 +506,44 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
     });
   };
 
+  // Add a function to handle file uploads with proper tracking
+  const startUpload = async (fileId: string) => {
+    try {
+      // Find the file in the queue
+      const file = uploadQueue.find((f) => f.fileId === fileId);
+      if (!file) return;
+
+      // Update status to uploading
+      setUploadQueue((prev) =>
+        prev.map((f) =>
+          f.fileId === fileId ? { ...f, status: "uploading", progress: 0 } : f
+        )
+      );
+
+      // Start the upload
+      const downloadUrl = await uploadFile(file);
+
+      console.log(`Upload complete for ${file.name}, URL: ${downloadUrl}`);
+
+      // File will be moved to completed uploads by the status listener
+    } catch (error: unknown) {
+      console.error(`Error uploading file ${fileId}:`, error);
+
+      // Update status to failed
+      setUploadQueue((prev) =>
+        prev.map((f) =>
+          f.fileId === fileId
+            ? {
+                ...f,
+                status: "failed",
+                error: error instanceof Error ? error.message : String(error),
+              }
+            : f
+        )
+      );
+    }
+  };
+
   const value = {
     uploadQueue,
     completedUploads,
@@ -488,6 +560,7 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
     pickVideo,
     retryUpload,
     reorderQueue,
+    startUpload,
   };
 
   return (
