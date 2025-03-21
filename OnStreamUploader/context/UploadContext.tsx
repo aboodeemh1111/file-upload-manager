@@ -4,6 +4,7 @@ import React, {
   useEffect,
   useContext,
   ReactNode,
+  useCallback,
 } from "react";
 import uploadService, { uploadFile } from "../services/uploadService";
 import { FileUpload } from "@/types/FileUpload";
@@ -37,7 +38,11 @@ interface UploadContextType {
   pickImage: () => Promise<void>;
   pickVideo: () => Promise<void>;
   retryUpload: (fileId: string) => boolean;
-  reorderQueue: (fileId: string, newPosition: number) => void;
+  reorderQueue: (
+    fileId: string,
+    newPosition: number,
+    newPriority?: "high" | "normal" | "low"
+  ) => void;
 }
 
 const UploadContext = createContext<UploadContextType | null>(null);
@@ -85,11 +90,18 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
     };
   }, []);
 
-  // Sync with upload service queue
+  // Optimize the interval for queue updates
   useEffect(() => {
     const intervalId = setInterval(() => {
-      setUploadQueue([...uploadService.getQueue()]);
-    }, 1000);
+      const currentQueue = uploadService.getQueue();
+      // Only update state if the queue has actually changed
+      setUploadQueue((prev) => {
+        if (JSON.stringify(prev) !== JSON.stringify(currentQueue)) {
+          return [...currentQueue];
+        }
+        return prev;
+      });
+    }, 2000); // Increase interval to 2 seconds to reduce updates
 
     return () => clearInterval(intervalId);
   }, []);
@@ -216,60 +228,63 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
     }
   };
 
-  // Modify addToQueue to start uploads immediately
-  const addToQueue = (
-    files: Array<{ uri: string; name: string; size: number; type: string }>,
-    priority: "high" | "normal" | "low" = "normal"
-  ) => {
-    console.log("Adding files to queue:", files.length);
+  // Memoize functions to prevent unnecessary re-renders
+  const addToQueue = useCallback(
+    (
+      files: Array<{ uri: string; name: string; size: number; type: string }>,
+      priority: "high" | "normal" | "low" = "normal"
+    ) => {
+      console.log("Adding files to queue:", files.length);
 
-    // Create FileUpload objects
-    const fileUploads: FileUpload[] = files.map((file) => ({
-      fileId: uuidv4(),
-      uri: file.uri,
-      name: file.name,
-      size: file.size || 0,
-      type: file.type || "application/octet-stream",
-      progress: 0,
-      status: "queued" as const,
-      priority,
-      error: null,
-      retryCount: 0,
-    }));
+      // Create FileUpload objects
+      const fileUploads: FileUpload[] = files.map((file) => ({
+        fileId: uuidv4(),
+        uri: file.uri,
+        name: file.name,
+        size: file.size || 0,
+        type: file.type || "application/octet-stream",
+        progress: 0,
+        status: "queued" as const,
+        priority,
+        error: null,
+        retryCount: 0,
+      }));
 
-    // Add to queue first
-    setUploadQueue((prev) => [...prev, ...fileUploads]);
+      // Add to queue first
+      setUploadQueue((prev) => [...prev, ...fileUploads]);
 
-    // Then start uploads
-    fileUploads.forEach(async (file) => {
-      try {
-        // Update status to uploading
-        setUploadQueue((prev) =>
-          prev.map((f) =>
-            f.fileId === file.fileId
-              ? { ...f, status: "uploading" as const }
-              : f
-          )
-        );
+      // Then start uploads
+      fileUploads.forEach(async (file) => {
+        try {
+          // Update status to uploading
+          setUploadQueue((prev) =>
+            prev.map((f) =>
+              f.fileId === file.fileId
+                ? { ...f, status: "uploading" as const }
+                : f
+            )
+          );
 
-        // Call uploadFile with just the file parameter
-        await uploadFileToFirebase(file);
-      } catch (error: any) {
-        console.error(`Upload error for ${file.name}:`, error);
-        setUploadQueue((prev) =>
-          prev.map((f) =>
-            f.fileId === file.fileId
-              ? { ...f, status: "failed" as const, error: error.message }
-              : f
-          )
-        );
-      }
-    });
+          // Call uploadFile with just the file parameter
+          await uploadFileToFirebase(file);
+        } catch (error: any) {
+          console.error(`Upload error for ${file.name}:`, error);
+          setUploadQueue((prev) =>
+            prev.map((f) =>
+              f.fileId === file.fileId
+                ? { ...f, status: "failed" as const, error: error.message }
+                : f
+            )
+          );
+        }
+      });
 
-    return fileUploads;
-  };
+      return fileUploads;
+    },
+    []
+  );
 
-  const removeFromQueue = (fileId: string) => {
+  const removeFromQueue = useCallback((fileId: string) => {
     const result = uploadService.removeFromQueue(fileId);
     if (result) {
       setUploadQueue((prev) => prev.filter((file) => file.fileId !== fileId));
@@ -278,7 +293,7 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
       );
     }
     return result;
-  };
+  }, []);
 
   const updatePriority = (
     fileId: string,
@@ -423,21 +438,35 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
   };
 
   // Add this function to reorder the queue
-  const reorderQueue = (fileId: string, newPosition: number) => {
+  const reorderQueue = (
+    fileId: string,
+    newPosition: number,
+    newPriority?: "high" | "normal" | "low"
+  ) => {
     setUploadQueue((prev) => {
       const newQueue = [...prev];
       const currentIndex = newQueue.findIndex((f) => f.fileId === fileId);
 
       if (currentIndex === -1) return prev;
 
-      // Remove from current position
+      // Get the file
       const [file] = newQueue.splice(currentIndex, 1);
+
+      // Update priority if provided
+      if (newPriority) {
+        file.priority = newPriority;
+      }
 
       // Insert at new position
       newQueue.splice(newPosition, 0, file);
 
-      // Notify server about the reordering
-      websocketService.updateQueueOrder(newQueue.map((f) => f.fileId));
+      // Notify server about the reordering with priorities
+      websocketService.updateQueueOrder(
+        newQueue.map((f) => ({
+          fileId: f.fileId,
+          priority: f.priority,
+        }))
+      );
 
       return newQueue;
     });

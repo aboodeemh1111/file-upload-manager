@@ -11,7 +11,6 @@ dotenv.config();
 
 // Initialize Express app
 const app = express();
-const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(
@@ -32,13 +31,15 @@ app.get("/health", (req, res) => {
   res.status(200).json({ status: "ok" });
 });
 
+const PORT = process.env.PORT || 4000;
+
 // Create HTTP server
 const server = http.createServer(app);
 
-// Setup WebSocket server
+// Setup WebSocket server with the same server instance
 setupWebSocketServer(server);
 
-// Start server
-server.listen(PORT, () => {
+// Start server with explicit host to avoid IPv6 issues
+server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on port ${PORT}`);
 });

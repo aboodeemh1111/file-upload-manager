@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useCallback } from "react";
 import { StyleSheet, View, FlatList, Text } from "react-native";
 import { useUpload } from "@/context/UploadContext";
 import FileItem from "./FileItem";
@@ -6,11 +6,23 @@ import { ThemedView } from "../ThemedView";
 import { ThemedText } from "../ThemedText";
 import Colors from "@/constants/Colors";
 import { useColorScheme } from "@/components/useColorScheme";
+import { FileUpload } from "@/types/FileUpload";
 
-export default function UploadQueue() {
+const UploadQueue = () => {
   const { uploadQueue, completedUploads, reorderQueue } = useUpload();
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme];
+
+  // Use memoized renderItem function to prevent re-renders
+  const renderItem = useCallback(
+    ({ item, index }: { item: FileUpload; index: number }) => (
+      <FileItem file={item} position={index} onReorder={reorderQueue} />
+    ),
+    [reorderQueue]
+  );
+
+  // Use stable key extractor
+  const keyExtractor = useCallback((item: FileUpload) => item.fileId, []);
 
   // Debug logs
   console.log(`Rendering queue with ${uploadQueue.length} items`);
@@ -27,10 +39,8 @@ export default function UploadQueue() {
         ) : (
           <FlatList
             data={uploadQueue}
-            keyExtractor={(item) => item.fileId}
-            renderItem={({ item, index }) => (
-              <FileItem file={item} position={index} onReorder={reorderQueue} />
-            )}
+            keyExtractor={keyExtractor}
+            renderItem={renderItem}
             style={styles.list}
           />
         )}
@@ -43,15 +53,15 @@ export default function UploadQueue() {
           </ThemedText>
           <FlatList
             data={completedUploads}
-            keyExtractor={(item) => item.fileId}
-            renderItem={({ item }) => <FileItem file={item} isCompleted />}
+            keyExtractor={keyExtractor}
+            renderItem={renderItem}
             style={styles.list}
           />
         </View>
       )}
     </View>
   );
-}
+};
 
 const styles = StyleSheet.create({
   container: {
@@ -79,3 +89,5 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
 });
+
+export default React.memo(UploadQueue);

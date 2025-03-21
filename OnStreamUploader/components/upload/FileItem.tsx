@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useCallback } from "react";
 import { StyleSheet, View, TouchableOpacity, Pressable } from "react-native";
 import { ThemedText } from "../ThemedText";
 import { ThemedView } from "../ThemedView";
@@ -47,6 +47,8 @@ const FileItem: React.FC<FileItemProps> = ({
     retryUpload,
     updatePriority,
     reorderQueue,
+    pauseUpload,
+    resumeUpload,
   } = useUpload();
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme];
@@ -107,14 +109,22 @@ const FileItem: React.FC<FileItemProps> = ({
     retryUpload(file.fileId);
   };
 
-  const handleRemove = () => {
+  const handleRemove = useCallback(() => {
     removeFromQueue(file.fileId);
-  };
+  }, [file.fileId, removeFromQueue]);
 
   const handlePriorityToggle = () => {
     const newPriority = file.priority === "high" ? "normal" : "high";
     updatePriority(file.fileId, newPriority);
   };
+
+  const handlePause = useCallback(() => {
+    pauseUpload(file.fileId);
+  }, [file.fileId, pauseUpload]);
+
+  const handleResume = useCallback(() => {
+    resumeUpload(file.fileId);
+  }, [file.fileId, resumeUpload]);
 
   const getStatusColor = () => {
     switch (file.status) {
@@ -146,9 +156,11 @@ const FileItem: React.FC<FileItemProps> = ({
     }
   };
 
-  console.log(
-    `FileItem rendering: ${file.name}, progress: ${file.progress}%, status: ${file.status}`
-  );
+  if (file.progress % 10 === 0 || file.progress === 100) {
+    console.log(
+      `FileItem rendering: ${file.name}, progress: ${file.progress}%, status: ${file.status}`
+    );
+  }
 
   return (
     <PanGestureHandler
@@ -343,4 +355,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default FileItem;
+export default React.memo(FileItem);

@@ -239,19 +239,20 @@ class WebSocketService {
   }
 
   // Update queue order
-  updateQueueOrder(fileIds: string[]) {
+  updateQueueOrder(
+    queue: Array<{ fileId: string; priority: "high" | "normal" | "low" }>
+  ): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.warn("WebSocket not connected, cannot update queue");
-      return false;
+      console.warn("WebSocket not connected, can't update queue order");
+      return;
     }
 
-    const message = {
-      type: "queue_reorder",
-      fileIds,
-    };
-
-    this.ws.send(JSON.stringify(message));
-    return true;
+    this.ws.send(
+      JSON.stringify({
+        type: "update_queue_order",
+        queue: queue,
+      })
+    );
   }
 
   // Listen for queue updates from server

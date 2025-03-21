@@ -8,8 +8,21 @@ const uploadQueue = new UploadQueue();
 // Map to store client connections
 const clients = new Map();
 
+// Example fix:
+let uploadProgressCallback = null;
+let queueStatusCallback = null;
+
+// Export setters for these callbacks
+function setUploadProgressCallback(callback) {
+  uploadProgressCallback = callback;
+}
+
+function setQueueStatusCallback(callback) {
+  queueStatusCallback = callback;
+}
+
 function setupWebSocketServer(server) {
-  const wss = new WebSocket.Server({ server });
+  const wss = new WebSocket.Server({ server: server });
 
   wss.on("connection", (ws) => {
     const clientId = uuidv4();
@@ -86,8 +99,7 @@ function handleClientMessage(clientId, data) {
 
     case "resume_upload":
       // Resume specific upload
-      uploadQueue.resumeUpload(data.fileId);
-      broadcastQueueStatus();
+      handleResumeUpload(client, data);
       break;
 
     case "ping":
@@ -123,15 +135,8 @@ function broadcastQueueStatus() {
 }
 
 function sendUploadProgress(clientId, fileId, progress) {
-  const client = clients.get(clientId);
-  if (client && client.ws.readyState === WebSocket.OPEN) {
-    client.ws.send(
-      JSON.stringify({
-        type: "upload_progress",
-        fileId,
-        progress,
-      })
-    );
+  if (uploadProgressCallback) {
+    uploadProgressCallback(clientId, fileId, progress);
   }
 }
 
@@ -146,8 +151,43 @@ function sendError(ws, message) {
   }
 }
 
+// Add resume upload support on the server
+const handleResumeUpload = (client, data) => {
+  const { fileId, uploadedChunks } = data;
+
+  // Find the file in the queue
+  const fileIndex = uploadQueue.findIndex((file) => file.fileId === fileId);
+  if (fileIndex === -1) {
+    return client.send(
+      JSON.stringify({
+        type: "error",
+        message: "File not found in queue",
+      })
+    );
+  }
+
+  // Update the file status
+  uploadQueue[fileIndex].status = "uploading";
+  uploadQueue[fileIndex].uploadedChunks = uploadedChunks || [];
+
+  // Broadcast queue update
+  broadcastQueueStatus();
+
+  // Send resume confirmation
+  client.send(
+    JSON.stringify({
+      type: "resume_upload",
+      fileId,
+      status: "resumed",
+      nextChunk: uploadQueue[fileIndex].uploadedChunks.length,
+    })
+  );
+};
+
 module.exports = {
   setupWebSocketServer,
+  setUploadProgressCallback,
+  setQueueStatusCallback,
   sendUploadProgress,
   broadcastQueueStatus,
   clients,

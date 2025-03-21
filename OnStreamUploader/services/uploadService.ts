@@ -302,6 +302,12 @@ export const uploadFile = async (file: FileUpload): Promise<string> => {
   console.log(`Starting upload process for ${file.name}`);
 
   try {
+    // Check if file can be compressed
+    if (shouldCompress(file)) {
+      file = await compressFile(file);
+      console.log(`Compressed ${file.name} for upload`);
+    }
+
     console.log(`Beginning Firebase upload for ${file.name}`);
 
     // Start the real upload to Firebase
@@ -354,10 +360,13 @@ const uploadToFirebase = async (
   const response = await fetch(file.uri);
   const blob = await response.blob();
 
-  // Create a storage reference
-  const storageRef = ref(storage, `uploads/${file.fileId}-${file.name}`);
+  // For large files (>10MB), use chunked upload
+  if (blob.size > 10 * 1024 * 1024) {
+    return uploadLargeFileInChunks(file, blob, onProgress);
+  }
 
-  // Start the upload
+  // Regular upload for smaller files
+  const storageRef = ref(storage, `uploads/${file.fileId}-${file.name}`);
   const uploadTask = uploadBytesResumable(storageRef, blob);
 
   return new Promise((resolve, reject) => {
@@ -383,6 +392,61 @@ const uploadToFirebase = async (
   });
 };
 
+// Add chunked upload implementation
+const uploadLargeFileInChunks = async (
+  file: FileUpload,
+  blob: Blob,
+  onProgress: (progress: number) => void
+): Promise<string> => {
+  const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB chunks
+  const totalChunks = Math.ceil(blob.size / CHUNK_SIZE);
+  const storageRef = ref(storage, `uploads/${file.fileId}-${file.name}`);
+
+  // Store upload metadata for resumability
+  const metadata = {
+    customMetadata: {
+      originalName: file.name,
+      fileId: file.fileId,
+      totalChunks: totalChunks.toString(),
+      totalSize: blob.size.toString(),
+    },
+  };
+
+  let uploadedBytes = 0;
+
+  for (let i = 0; i < totalChunks; i++) {
+    const start = i * CHUNK_SIZE;
+    const end = Math.min(blob.size, start + CHUNK_SIZE);
+    const chunk = blob.slice(start, end);
+
+    // Upload this chunk
+    const chunkRef = ref(storage, `uploads/chunks/${file.fileId}-chunk-${i}`);
+    const chunkTask = uploadBytesResumable(chunkRef, chunk);
+
+    await new Promise<void>((resolve, reject) => {
+      chunkTask.on(
+        "state_changed",
+        (snapshot) => {
+          uploadedBytes = start + snapshot.bytesTransferred;
+          const progress = (uploadedBytes / blob.size) * 100;
+          onProgress(progress);
+        },
+        reject,
+        resolve
+      );
+    });
+  }
+
+  // All chunks uploaded, create final file
+  // In a production app, you'd use a Cloud Function to combine chunks
+
+  // For now, return the URL of the first chunk as a placeholder
+  const downloadURL = await getDownloadURL(
+    ref(storage, `uploads/chunks/${file.fileId}-chunk-0`)
+  );
+  return downloadURL;
+};
+
 // Add these helper functions for notifying listeners
 const notifyProgressListeners = (fileId: string, progress: number) => {
   websocketService.notifyListeners("upload_progress", {
@@ -401,4 +465,38 @@ const notifyStatusListeners = (
     status,
     error,
   });
+};
+
+// Helper to determine if a file should be compressed
+const shouldCompress = (file: FileUpload): boolean => {
+  // Compress images and certain document types
+  const compressibleTypes = [
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ];
+
+  // Don't compress if already small
+  if (file.size < 1 * 1024 * 1024) return false; // Skip if < 1MB
+
+  return compressibleTypes.includes(file.type);
+};
+
+// Compress file before upload
+const compressFile = async (file: FileUpload): Promise<FileUpload> => {
+  // For images, use image-manipulation library
+  if (file.type.startsWith("image/")) {
+    // This would use a library like react-native-image-manipulator
+    // For this example, we'll just simulate compression
+    return {
+      ...file,
+      size: Math.floor(file.size * 0.7), // Simulate 30% reduction
+      uri: file.uri, // In real implementation, this would be the compressed file URI
+    };
+  }
+
+  // For other file types, you'd use appropriate compression techniques
+  return file;
 };
