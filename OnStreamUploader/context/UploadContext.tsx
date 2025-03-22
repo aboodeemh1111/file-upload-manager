@@ -149,70 +149,46 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
 
   useEffect(() => {
     // Listen for upload status updates
-    const unsubscribe = websocketService.addListener(
-      "upload_status",
-      (data: UploadStatusData) => {
-        console.log(
-          `Received status update for ${data.fileId}: ${data.status}`
-        );
+    const handleStatusUpdate = (data: UploadStatusData) => {
+      console.log(`Received status update for ${data.fileId}: ${data.status}`);
 
-        // Only move to completed uploads when status is "completed" AND progress is 100%
-        if (data.status === "completed") {
-          setUploadQueue((prev) => {
-            const fileIndex = prev.findIndex((f) => f.fileId === data.fileId);
-            if (fileIndex !== -1) {
-              const file = prev[fileIndex];
-
-              // Only move to completed if progress is 100%
-              if (file.progress === 100) {
-                // Add to completed uploads
-                setCompletedUploads((current) => [
-                  ...current,
-                  {
-                    ...file,
-                    status: "completed" as const,
-                    progress: 100,
-                  },
-                ]);
-
-                // Remove from queue only after adding to completed
-                return prev.filter((f) => f.fileId !== data.fileId);
+      // Update the file status in the queue
+      setUploadQueue((prevQueue) => {
+        return prevQueue.map((file) =>
+          file.fileId === data.fileId
+            ? {
+                ...file,
+                status: data.status as FileUpload["status"],
+                error: data.error || file.error,
+                progress: data.status === "completed" ? 100 : file.progress,
               }
+            : file
+        );
+      });
 
-              // Otherwise just update the status
-              return prev.map((f) =>
-                f.fileId === data.fileId
-                  ? { ...f, status: "completed" as const }
-                  : f
-              );
-            }
-            return prev;
-          });
-        } else {
-          // For all other statuses, just update the status in the queue
-          setUploadQueue((prev) =>
-            prev.map((file) =>
-              file.fileId === data.fileId
-                ? {
-                    ...file,
-                    status: data.status as
-                      | "uploading"
-                      | "queued"
-                      | "paused"
-                      | "failed",
-                    error: data.error || null,
-                  }
-                : file
-            )
-          );
-        }
+      // If completed, also add to completed uploads but DON'T remove from queue
+      if (data.status === "completed") {
+        setCompletedUploads((prev) => {
+          // Check if already in completed uploads
+          const exists = prev.some((file) => file.fileId === data.fileId);
+          if (exists) return prev;
+
+          // Find the file in the queue
+          const file = uploadQueue.find((f) => f.fileId === data.fileId);
+          if (!file) return prev;
+
+          // Add to completed uploads
+          return [...prev, { ...file, status: "completed", progress: 100 }];
+        });
       }
-    );
+    };
+
+    websocketService.addListener("upload_status", handleStatusUpdate);
 
     return () => {
-      unsubscribe();
+      websocketService.removeListener("upload_status", handleStatusUpdate);
     };
-  }, []);
+  }, [uploadQueue]);
 
   // Listen for queue updates from server
   useEffect(() => {

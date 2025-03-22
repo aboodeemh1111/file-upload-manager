@@ -35,12 +35,14 @@ class UploadService {
     );
 
     if (fileIndex !== -1) {
+      // Update the file status but keep it in the queue
       this.uploadQueue[fileIndex].status = data.status as any;
       if (data.error) {
         this.uploadQueue[fileIndex].error = data.error;
       }
 
-      if (data.status === "completed") {
+      // Only reset the current upload if it's completed or failed
+      if (data.status === "completed" || data.status === "failed") {
         // If the current upload is completed, process the next file
         if (this.currentUpload?.fileId === data.fileId) {
           this.currentUpload = null;
@@ -536,17 +538,25 @@ const processQueue = async () => {
     // Continue with next file
     isUploading = false;
     processQueue();
-  } catch (error) {
+  } catch (error: unknown) {
     console.error(`Error uploading file ${nextFile.name}:`, error);
 
     // Update file status to failed
     uploadQueue = uploadQueue.map((file) =>
       file.fileId === nextFile.fileId
-        ? { ...file, status: "failed", error: error.message }
+        ? {
+            ...file,
+            status: "failed",
+            error: error instanceof Error ? error.message : String(error),
+          }
         : file
     );
 
-    websocketService.updateFileStatus(nextFile.fileId, "failed", error.message);
+    websocketService.updateFileStatus(
+      nextFile.fileId,
+      "failed",
+      error instanceof Error ? error.message : String(error)
+    );
 
     // Continue with next file
     isUploading = false;
