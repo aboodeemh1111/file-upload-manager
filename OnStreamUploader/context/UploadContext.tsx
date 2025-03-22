@@ -16,6 +16,7 @@ import websocketService, {
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { v4 as uuidv4 } from "uuid";
+import { Platform } from "react-native";
 
 interface UploadContextType {
   uploadQueue: FileUpload[];
@@ -43,6 +44,8 @@ interface UploadContextType {
     newPosition: number,
     newPriority?: "high" | "normal" | "low"
   ) => void;
+  setUploadQueue: React.Dispatch<React.SetStateAction<FileUpload[]>>;
+  setCompletedUploads: React.Dispatch<React.SetStateAction<FileUpload[]>>;
 }
 
 const UploadContext = createContext<UploadContextType | null>(null);
@@ -85,7 +88,7 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
 }) => {
   const [uploadQueue, setUploadQueue] = useState<FileUpload[]>([]);
   const [completedUploads, setCompletedUploads] = useState<FileUpload[]>([]);
-  const [isConnected, setIsConnected] = useState(false);
+  const [isConnected, setIsConnected] = useState(true);
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -166,20 +169,27 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
         );
       });
 
-      // If completed, also add to completed uploads but DON'T remove from queue
+      // If completed, add to completed uploads but keep in queue for a moment
       if (data.status === "completed") {
+        // Find the file in the queue
+        const file = uploadQueue.find((f) => f.fileId === data.fileId);
+        if (!file) return;
+
+        // Add to completed uploads
         setCompletedUploads((prev) => {
           // Check if already in completed uploads
           const exists = prev.some((file) => file.fileId === data.fileId);
           if (exists) return prev;
 
-          // Find the file in the queue
-          const file = uploadQueue.find((f) => f.fileId === data.fileId);
-          if (!file) return prev;
-
-          // Add to completed uploads
           return [...prev, { ...file, status: "completed", progress: 100 }];
         });
+
+        // Keep in queue for 3 seconds before removing
+        setTimeout(() => {
+          setUploadQueue((prev) =>
+            prev.filter((f) => f.fileId !== data.fileId)
+          );
+        }, 3000);
       }
     };
 
@@ -217,6 +227,17 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
 
       const url = await uploadFile(file);
       console.log(`Upload complete for ${file.name}, URL:`, url);
+
+      // Update status to completed but keep in queue
+      setUploadQueue((prev) =>
+        prev.map((f) =>
+          f.fileId === file.fileId
+            ? { ...f, status: "completed", progress: 100 }
+            : f
+        )
+      );
+
+      // Add to completed uploads
       setCompletedUploads((prev) => [
         ...prev,
         {
@@ -225,7 +246,11 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
           progress: 100,
         },
       ]);
-      setUploadQueue((prev) => prev.filter((f) => f.fileId !== file.fileId));
+
+      // Remove from queue after delay
+      setTimeout(() => {
+        setUploadQueue((prev) => prev.filter((f) => f.fileId !== file.fileId));
+      }, 3000);
     } catch (error: any) {
       console.error(`Upload error for ${file.name}:`, error);
       setUploadQueue((prev) =>
@@ -260,38 +285,29 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
         retryCount: 0,
       }));
 
-      // Add to queue first
+      // Add to queue first - use a function to ensure we're working with the latest state
       setUploadQueue((prev) => [...prev, ...fileUploads]);
 
-      // Then start uploads
-      fileUploads.forEach(async (file) => {
-        try {
-          // Update status to uploading
-          setUploadQueue((prev) =>
-            prev.map((f) =>
-              f.fileId === file.fileId
-                ? { ...f, status: "uploading" as const }
-                : f
-            )
-          );
+      // Log the queue after adding files
+      console.log(
+        "Queue after adding files:",
+        uploadQueue.length + fileUploads.length
+      );
 
-          // Call uploadFile with just the file parameter
-          await uploadFileToFirebase(file);
-        } catch (error: any) {
-          console.error(`Upload error for ${file.name}:`, error);
-          setUploadQueue((prev) =>
-            prev.map((f) =>
-              f.fileId === file.fileId
-                ? { ...f, status: "failed" as const, error: error.message }
-                : f
-            )
-          );
-        }
-      });
+      // Then start uploads after a short delay to ensure UI updates first
+      setTimeout(() => {
+        fileUploads.forEach(async (file) => {
+          try {
+            await uploadFileToFirebase(file);
+          } catch (error: any) {
+            console.error(`Upload error for ${file.name}:`, error);
+          }
+        });
+      }, 100);
 
       return fileUploads;
     },
-    []
+    [uploadQueue]
   );
 
   const removeFromQueue = useCallback((fileId: string) => {
@@ -388,20 +404,21 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
       if (!result.canceled && result.assets && result.assets.length > 0) {
         console.log("Images picked:", result.assets);
 
+        // Create file objects
         const files = result.assets.map((file) => ({
-          fileId: uuidv4(),
           uri: file.uri,
           name: file.fileName || `image-${Date.now()}.jpg`,
           size: file.fileSize || 0,
           type: file.mimeType || "image/jpeg",
-          progress: 0,
-          status: "queued" as const,
-          priority: "normal" as const,
-          error: null,
-          retryCount: 0,
         }));
 
-        addToQueue(files);
+        // Add to queue - this will trigger UI update
+        const uploads = addToQueue(files);
+
+        // Log the queue state after adding
+        console.log("Queue after adding in pickImage:", uploadQueue.length);
+
+        return uploads;
       }
     } catch (error) {
       console.error("Error picking image:", error);
@@ -537,6 +554,8 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
     retryUpload,
     reorderQueue,
     startUpload,
+    setUploadQueue,
+    setCompletedUploads,
   };
 
   return (

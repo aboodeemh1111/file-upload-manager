@@ -168,13 +168,13 @@ const FileItem: React.FC<FileItemProps> = ({
   const getStatusColor = () => {
     switch (file.status) {
       case "completed":
-        return "#4CAF50";
+        return colors.success;
       case "failed":
-        return "#F44336";
-      case "uploading":
-        return "#2196F3";
+        return colors.error;
+      case "paused":
+        return colors.warning;
       default:
-        return "#9E9E9E";
+        return colors.primary;
     }
   };
 
@@ -286,17 +286,7 @@ const FileItem: React.FC<FileItemProps> = ({
                 file.status === "queued" ||
                 file.status === "failed") && (
                 <View style={[styles.progressContainer, { opacity: 1 }]}>
-                  <UploadManager
-                    file={file}
-                    onComplete={(downloadURL) => {
-                      console.log("Upload complete:", downloadURL);
-                      // Update your context with the completed upload
-                    }}
-                    onError={(error) => {
-                      console.error("Upload error:", error);
-                      // Handle the error in your context
-                    }}
-                  />
+                  <ProgressIndicator progress={file.progress} />
                 </View>
               )}
             </View>
