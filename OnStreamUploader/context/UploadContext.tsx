@@ -616,7 +616,12 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
         setUploadQueue((prev) =>
           prev.map((item) =>
             item.fileId === fileUpload.fileId
-              ? { ...item, progress: 100, status: "completed" }
+              ? {
+                  ...item,
+                  progress: 100,
+                  status: "completed",
+                  completedAt: Date.now(),
+                }
               : item
           )
         );
@@ -624,7 +629,12 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
         // Add to completed uploads
         setCompletedUploads((prev) => [
           ...prev,
-          { ...fileUpload, progress: 100, status: "completed" },
+          {
+            ...fileUpload,
+            progress: 100,
+            status: "completed",
+            completedAt: Date.now(),
+          },
         ]);
 
         // Remove from queue after delay

@@ -16,11 +16,34 @@ const UploadQueue = () => {
   // Use a ref to keep track of the last non-empty queue
   const lastQueueRef = useRef<FileUpload[]>([]);
 
+  // Track completed file IDs to filter them out
+  const completedFileIds = useRef(new Set<string>());
+
+  // Update completed file IDs
+  useEffect(() => {
+    completedUploads.forEach((file) => {
+      completedFileIds.current.add(file.fileId);
+    });
+  }, [completedUploads]);
+
   // Update the ref whenever we have a non-empty queue
   useEffect(() => {
     if (uploadQueue.length > 0) {
-      lastQueueRef.current = [...uploadQueue];
-      console.log("📝 Saved queue state with", uploadQueue.length, "items");
+      // Only save files that aren't completed
+      const activeUploads = uploadQueue.filter(
+        (file) =>
+          file.status !== "completed" ||
+          !completedFileIds.current.has(file.fileId)
+      );
+
+      if (activeUploads.length > 0) {
+        lastQueueRef.current = [...activeUploads];
+        console.log(
+          "📝 Saved queue state with",
+          activeUploads.length,
+          "active items"
+        );
+      }
     }
   }, [uploadQueue]);
 
@@ -36,9 +59,33 @@ const UploadQueue = () => {
     });
   }
 
+  // Filter out completed uploads from the queue display
+  const filterCompletedUploads = (queue: FileUpload[]) => {
+    return queue.filter((file) => {
+      // Check if this file is in the completed uploads list
+      const isInCompletedList = completedUploads.some(
+        (completed) => completed.fileId === file.fileId
+      );
+
+      // If it's in the completed list, don't show it in the queue
+      if (isInCompletedList) {
+        return false;
+      }
+
+      // Otherwise, show it if it's not completed or if it's recently completed
+      return (
+        file.status !== "completed" ||
+        (file.status === "completed" &&
+          file.progress === 100 &&
+          Date.now() - (file.completedAt || Date.now()) < 3000)
+      );
+    });
+  };
+
   // Render the actual queue or the last known state if empty
-  const queueToRender =
-    uploadQueue.length > 0 ? uploadQueue : lastQueueRef.current;
+  const queueToRender = filterCompletedUploads(
+    uploadQueue.length > 0 ? uploadQueue : lastQueueRef.current
+  );
 
   // Use memoized renderItem function to prevent re-renders
   const renderItem = useCallback(

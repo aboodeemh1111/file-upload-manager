@@ -9,4 +9,5 @@ export interface FileUpload {
   priority: "high" | "normal" | "low";
   error: string | null;
   retryCount: number;
+  completedAt?: number;
 }
