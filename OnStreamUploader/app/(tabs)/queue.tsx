@@ -4,7 +4,6 @@ import {
   View,
   FlatList,
   TouchableOpacity,
-  Text,
   SafeAreaView,
 } from "react-native";
 import { useUpload } from "@/context/UploadContext";
@@ -13,7 +12,7 @@ import { ThemedView } from "@/components/ThemedView";
 import { ThemedText } from "@/components/ThemedText";
 import { IconSymbol } from "@/components/ui/IconSymbol";
 import Colors from "@/constants/Colors";
-import { useColorScheme } from "@/components/useColorScheme";
+import { useColorScheme } from "@/hooks/useColorScheme";
 import { FileUpload } from "@/types/FileUpload";
 
 export default function QueueScreen() {
@@ -25,11 +24,10 @@ export default function QueueScreen() {
     pauseUpload,
     resumeUpload,
     cancelUpload,
-    startUpload,
   } = useUpload();
   const [showCompleted, setShowCompleted] = useState(false);
   const colorScheme = useColorScheme();
-  const colors = Colors[colorScheme];
+  const colors = Colors[colorScheme ?? "light"];
 
   const renderItem = ({ item, index }: { item: FileUpload; index: number }) => (
     <FileItem
@@ -48,75 +46,79 @@ export default function QueueScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <ThemedView style={styles.header}>
+      <View style={styles.header}>
         <ThemedText style={styles.title}>Upload Queue</ThemedText>
-
         <View style={styles.tabs}>
           <TouchableOpacity
             style={[
               styles.tab,
-              !showCompleted && { backgroundColor: colors.primary },
+              {
+                backgroundColor: !showCompleted
+                  ? colors.primary
+                  : "transparent",
+              },
             ]}
             onPress={() => setShowCompleted(false)}
           >
-            <Text
-              style={[styles.tabText, !showCompleted && { color: "white" }]}
+            <ThemedText
+              style={[
+                styles.tabText,
+                { color: !showCompleted ? "white" : colors.text },
+              ]}
             >
-              Queue ({uploadQueue.length})
-            </Text>
+              Active ({uploadQueue.length})
+            </ThemedText>
           </TouchableOpacity>
-
           <TouchableOpacity
             style={[
               styles.tab,
-              showCompleted && { backgroundColor: colors.primary },
+              {
+                backgroundColor: showCompleted ? colors.primary : "transparent",
+              },
             ]}
             onPress={() => setShowCompleted(true)}
           >
-            <Text style={[styles.tabText, showCompleted && { color: "white" }]}>
+            <ThemedText
+              style={[
+                styles.tabText,
+                { color: showCompleted ? "white" : colors.text },
+              ]}
+            >
               Completed ({completedUploads.length})
-            </Text>
+            </ThemedText>
           </TouchableOpacity>
         </View>
-      </ThemedView>
+      </View>
 
       <ThemedView style={styles.content}>
-        {!showCompleted ? (
-          uploadQueue.length > 0 ? (
+        {showCompleted ? (
+          completedUploads.length > 0 ? (
             <FlatList
-              data={uploadQueue}
-              renderItem={renderItem}
+              data={completedUploads}
+              renderItem={renderCompletedItem}
               keyExtractor={(item) => item.fileId}
               style={styles.list}
             />
           ) : (
             <View style={styles.emptyState}>
-              <IconSymbol
-                name="cloud-upload"
-                size={48}
-                color={colors.primary}
-              />
+              <IconSymbol name="checkmark.circle" size={48} color="#BDBDBD" />
               <ThemedText style={styles.emptyText}>
-                No files in queue. Add files from the Upload tab.
+                No completed uploads yet
               </ThemedText>
             </View>
           )
-        ) : completedUploads.length > 0 ? (
+        ) : uploadQueue.length > 0 ? (
           <FlatList
-            data={completedUploads}
-            renderItem={renderCompletedItem}
+            data={uploadQueue}
+            renderItem={renderItem}
             keyExtractor={(item) => item.fileId}
             style={styles.list}
           />
         ) : (
           <View style={styles.emptyState}>
-            <IconSymbol
-              name="checkmark-circle"
-              size={48}
-              color={colors.success}
-            />
+            <IconSymbol name="cloud.upload" size={48} color="#BDBDBD" />
             <ThemedText style={styles.emptyText}>
-              No completed uploads yet.
+              Your upload queue is empty
             </ThemedText>
           </View>
         )}

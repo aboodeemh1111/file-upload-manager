@@ -6,25 +6,30 @@ import { useColorScheme } from "@/hooks/useColorScheme";
 import { IconSymbol } from "@/components/ui/IconSymbol";
 import TabBarBackground from "@/components/ui/TabBarBackground";
 import Colors from "@/constants/Colors";
+import { HapticTab } from "@/components/HapticTab";
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
+  const colors = Colors[colorScheme ?? "light"];
 
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? "light"].tint,
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.tabIconDefault,
         headerShown: useClientOnlyValue(false, true),
         tabBarBackground: () => <TabBarBackground />,
       }}
+      tabBar={(props) => <TabBarBackground {...props} />}
     >
       <Tabs.Screen
         name="index"
         options={{
           title: "Home",
           tabBarIcon: ({ color }) => (
-            <IconSymbol name="house.fill" color={color} size={28} />
+            <IconSymbol name="house" color={color} size={28} />
           ),
+          tabBarButton: (props) => <HapticTab {...props} />,
         }}
       />
       <Tabs.Screen
@@ -32,8 +37,9 @@ export default function TabLayout() {
         options={{
           title: "Upload",
           tabBarIcon: ({ color }) => (
-            <IconSymbol name="arrow.up.circle.fill" color={color} size={28} />
+            <IconSymbol name="plus.circle" color={color} size={28} />
           ),
+          tabBarButton: (props) => <HapticTab {...props} />,
         }}
       />
       <Tabs.Screen
@@ -43,6 +49,7 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => (
             <IconSymbol name="gear" color={color} size={28} />
           ),
+          tabBarButton: (props) => <HapticTab {...props} />,
         }}
       />
       <Tabs.Screen
@@ -52,6 +59,7 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => (
             <IconSymbol name="list" color={color} size={28} />
           ),
+          tabBarButton: (props) => <HapticTab {...props} />,
         }}
       />
     </Tabs>

@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useState,
+  createRef,
+  useRef,
+} from "react";
 import {
   StyleSheet,
   View,
@@ -27,6 +33,7 @@ import Animated, {
   useSharedValue,
   withSpring,
 } from "react-native-reanimated";
+import UploadManager from "./UploadManager";
 
 // Add type definition for the FileItem props
 interface FileItemProps {
@@ -194,8 +201,11 @@ const FileItem: React.FC<FileItemProps> = ({
     );
   }
 
+  const fileItemRef = useRef(null);
+
   return (
     <PanGestureHandler
+      ref={fileItemRef}
       onGestureEvent={panGestureEvent}
       enabled={!isCompleted && file.status !== "uploading"}
     >
@@ -271,11 +281,21 @@ const FileItem: React.FC<FileItemProps> = ({
               )}
 
               {/* Original progress bar */}
-              {(file.status === "uploading" || file.status === "paused") && (
-                <View style={styles.progressContainer}>
-                  <ProgressIndicator
-                    progress={file.progress}
-                    status={file.status}
+              {(file.status === "uploading" ||
+                file.status === "paused" ||
+                file.status === "queued" ||
+                file.status === "failed") && (
+                <View style={[styles.progressContainer, { opacity: 1 }]}>
+                  <UploadManager
+                    file={file}
+                    onComplete={(downloadURL) => {
+                      console.log("Upload complete:", downloadURL);
+                      // Update your context with the completed upload
+                    }}
+                    onError={(error) => {
+                      console.error("Upload error:", error);
+                      // Handle the error in your context
+                    }}
                   />
                 </View>
               )}
@@ -305,7 +325,8 @@ const FileItem: React.FC<FileItemProps> = ({
 
             {(file.status === "uploading" ||
               file.status === "paused" ||
-              file.status === "queued") && (
+              file.status === "queued" ||
+              file.status === "failed") && (
               <TouchableOpacity
                 style={styles.actionButton}
                 onPress={onCancel}
