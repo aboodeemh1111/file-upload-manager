@@ -44,6 +44,7 @@ interface FileItemProps {
   onPause?: () => void;
   onResume?: () => void;
   onCancel?: () => void;
+  onRetry?: () => boolean;
 }
 
 // Add this type definition for the gesture context
@@ -59,6 +60,7 @@ const FileItem: React.FC<FileItemProps> = ({
   onPause,
   onResume,
   onCancel,
+  onRetry,
 }) => {
   // Add state to track upload status independently
   const [uploadStatus, setUploadStatus] = useState({

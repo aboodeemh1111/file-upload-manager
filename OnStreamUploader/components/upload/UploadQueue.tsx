@@ -9,7 +9,13 @@ import { useColorScheme } from "@/components/useColorScheme";
 import { FileUpload } from "@/types/FileUpload";
 
 const UploadQueue = () => {
-  const { uploadQueue, completedUploads, reorderQueue } = useUpload();
+  const {
+    uploadQueue,
+    completedUploads,
+    reorderQueue,
+    cancelUpload,
+    retryUpload,
+  } = useUpload();
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme];
 
@@ -88,16 +94,18 @@ const UploadQueue = () => {
   );
 
   // Use memoized renderItem function to prevent re-renders
-  const renderItem = useCallback(
-    ({ item, index }: { item: FileUpload; index: number }) => (
+  const renderItem = ({ item }: { item: FileUpload }) => {
+    console.log(
+      `FileItem rendering: ${item.name}, progress: ${item.progress}%, status: ${item.status}`
+    );
+    return (
       <FileItem
         file={item}
-        position={index}
-        onReorder={(fileId, newPosition) => reorderQueue(fileId, newPosition)}
+        onCancel={() => cancelUpload(item.fileId)}
+        onRetry={() => retryUpload(item.fileId)}
       />
-    ),
-    [reorderQueue]
-  );
+    );
+  };
 
   // Render completed items
   const renderCompletedItem = useCallback(

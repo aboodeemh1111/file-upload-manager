@@ -5,6 +5,7 @@ import React, {
   useContext,
   ReactNode,
   useCallback,
+  useRef,
 } from "react";
 import uploadService, { uploadFile } from "../services/uploadService";
 import { FileUpload } from "@/types/FileUpload";
@@ -91,6 +92,7 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
   const [isConnected, setIsConnected] = useState(true);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [testUploads, setTestUploads] = useState<Set<string>>(new Set());
+  const lastQueueRef = useRef<FileUpload[]>([]);
 
   useEffect(() => {
     // Connect to WebSocket server
@@ -264,7 +266,7 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
     }
   };
 
-  // Memoize functions to prevent unnecessary re-renders
+  // Update the addToQueue function to properly handle video uploads
   const addToQueue = useCallback(
     (
       files: Array<{ uri: string; name: string; size: number; type: string }>,
@@ -272,43 +274,49 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
     ) => {
       console.log("Adding files to queue:", files.length);
 
-      // Create FileUpload objects
-      const fileUploads: FileUpload[] = files.map((file) => ({
-        fileId: uuidv4(),
-        uri: file.uri,
-        name: file.name,
-        size: file.size || 0,
-        type: file.type || "application/octet-stream",
-        progress: 0,
-        status: "queued" as const,
-        priority,
-        error: null,
-        retryCount: 0,
-      }));
+      const newFiles: FileUpload[] = files.map((file) => {
+        const fileId = uuidv4();
+        return {
+          fileId,
+          name: file.name,
+          size: file.size,
+          type: file.type,
+          uri: file.uri,
+          progress: 0,
+          status: "queued",
+          priority,
+          addedAt: new Date().toISOString(),
+        };
+      });
 
-      // Add to queue first - use a function to ensure we're working with the latest state
-      setUploadQueue((prev) => [...prev, ...fileUploads]);
+      // Update the queue with the new files
+      setUploadQueue((prevQueue) => {
+        const updatedQueue = [...prevQueue, ...newFiles];
+        console.log("Queue after adding files:", updatedQueue.length);
+        return updatedQueue;
+      });
 
-      // Log the queue after adding files
-      console.log(
-        "Queue after adding files:",
-        uploadQueue.length + fileUploads.length
-      );
+      // Update the lastQueueRef with the new files
+      if (lastQueueRef.current) {
+        lastQueueRef.current = [...lastQueueRef.current, ...newFiles];
+      } else {
+        lastQueueRef.current = [...newFiles];
+      }
 
-      // Then start uploads after a short delay to ensure UI updates first
+      // Start uploads after a short delay to ensure UI updates first
       setTimeout(() => {
-        fileUploads.forEach(async (file) => {
+        newFiles.forEach((file) => {
           try {
-            await uploadFileToFirebase(file);
+            startUpload(file);
           } catch (error: any) {
             console.error(`Upload error for ${file.name}:`, error);
           }
         });
       }, 100);
 
-      return fileUploads;
+      return newFiles;
     },
-    [uploadQueue]
+    []
   );
 
   const removeFromQueue = useCallback((fileId: string) => {
@@ -430,27 +438,41 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Videos,
-        allowsMultipleSelection: true,
+        allowsEditing: false,
         quality: 1,
       });
 
-      if (!result.canceled && result.assets && result.assets.length > 0) {
-        console.log("Videos picked:", result.assets);
+      if (!result.canceled && result.assets.length > 0) {
+        const asset = result.assets[0];
+        console.log("Video selected:", asset);
 
-        const files = result.assets.map((file) => ({
+        // Create a proper FileUpload object
+        const fileUpload: FileUpload = {
           fileId: uuidv4(),
-          uri: file.uri,
-          name: file.fileName || `video-${Date.now()}.mp4`,
-          size: file.fileSize || 0,
-          type: file.mimeType || "video/mp4",
+          uri: asset.uri,
+          name: asset.fileName || `video-${Date.now()}.mp4`,
+          size: asset.fileSize || 0,
+          type: "video/mp4",
+          status: "queued",
           progress: 0,
-          status: "queued" as const,
-          priority: "normal" as const,
+          priority: "normal",
+          createdAt: new Date().toISOString(),
           error: null,
           retryCount: 0,
-        }));
+        };
 
-        addToQueue(files);
+        // Add to queue first
+        const addedFiles = addToQueue([fileUpload]);
+        console.log("Added video to queue:", addedFiles);
+
+        // Start upload after adding to queue, but don't remove from queue
+        if (addedFiles.length > 0) {
+          // Use a timeout to ensure the UI updates with the queued item first
+          setTimeout(() => {
+            console.log("Starting upload for video:", addedFiles[0].name);
+            startUpload(addedFiles[0]);
+          }, 500);
+        }
       }
     } catch (error) {
       console.error("Error picking video:", error);
@@ -500,41 +522,79 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
     });
   };
 
-  // Add a function to handle file uploads with proper tracking
-  const startUpload = async (fileId: string) => {
-    try {
-      // Find the file in the queue
-      const file = uploadQueue.find((f) => f.fileId === fileId);
-      if (!file) return;
+  // Fix the startUpload function to properly handle video uploads and prevent duplicates
+  const startUpload = async (file: FileUpload) => {
+    console.log("Starting upload for file:", file.name);
 
-      // Update status to uploading
+    try {
+      // Check if file is already in the queue
+      const fileInQueue = uploadQueue.find((f) => f.fileId === file.fileId);
+
+      if (!fileInQueue) {
+        console.log(`File ${file.fileId} not in queue, adding it back`);
+        setUploadQueue((prev) => [...prev, file]);
+      }
+
+      // Update file status to uploading
       setUploadQueue((prev) =>
         prev.map((f) =>
-          f.fileId === fileId ? { ...f, status: "uploading", progress: 0 } : f
+          f.fileId === file.fileId ? { ...f, status: "uploading" } : f
         )
       );
 
-      // Start the upload
-      const downloadUrl = await uploadFile(file);
+      // Perform the actual upload
+      const result = await uploadFile(file);
+      console.log("Upload result:", result);
 
-      console.log(`Upload complete for ${file.name}, URL: ${downloadUrl}`);
+      // Important: DON'T remove from queue until we've added to completed uploads
+      // Check if the file is already in completed uploads to prevent duplicates
+      setCompletedUploads((prev) => {
+        // Check if this file is already in completed uploads
+        const existingIndex = prev.findIndex((f) => f.fileId === file.fileId);
 
-      // File will be moved to completed uploads by the status listener
-    } catch (error: unknown) {
-      console.error(`Error uploading file ${fileId}:`, error);
+        if (existingIndex >= 0) {
+          // Update the existing entry instead of adding a new one
+          return prev.map((f, index) =>
+            index === existingIndex
+              ? {
+                  ...file,
+                  status: "completed",
+                  progress: 100,
+                  url: result?.url || file.uri,
+                }
+              : f
+          );
+        } else {
+          // Add as a new completed upload
+          return [
+            ...prev,
+            {
+              ...file,
+              status: "completed",
+              progress: 100,
+              url: result?.url || file.uri,
+            },
+          ];
+        }
+      });
 
-      // Update status to failed
+      // Now we can safely remove from queue
+      setUploadQueue((prev) => prev.filter((f) => f.fileId !== file.fileId));
+
+      return result;
+    } catch (error) {
+      console.error("Error uploading file:", error);
+
+      // Update file status to error
       setUploadQueue((prev) =>
         prev.map((f) =>
-          f.fileId === fileId
-            ? {
-                ...f,
-                status: "failed",
-                error: error instanceof Error ? error.message : String(error),
-              }
+          f.fileId === file.fileId
+            ? { ...f, status: "error", error: error.message }
             : f
         )
       );
+
+      throw error;
     }
   };
 
@@ -654,6 +714,52 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
       }
     }, 500);
   };
+
+  // Update the updateProgress function to properly handle video uploads
+  const updateProgress = (fileId: string, progress: number) => {
+    console.log(`📊 Updating progress for ${fileId}: ${progress}%`);
+
+    // Check if file is in queue
+    const fileInQueue = uploadQueue.find((f) => f.fileId === fileId);
+
+    if (!fileInQueue && progress < 100) {
+      console.log("⚠️ File was removed from queue, re-adding it");
+      // Try to find the file in the lastQueueRef
+      const lastFile = lastQueueRef.current?.find((f) => f.fileId === fileId);
+      if (lastFile) {
+        setUploadQueue((prev) => [
+          ...prev,
+          { ...lastFile, progress, status: "uploading" },
+        ]);
+        return;
+      }
+    }
+
+    setUploadQueue((prev) => {
+      return prev.map((file) =>
+        file.fileId === fileId
+          ? {
+              ...file,
+              progress,
+              status: progress === 100 ? "completed" : "uploading",
+            }
+          : file
+      );
+    });
+  };
+
+  // Add useEffect to update lastQueueRef when uploadQueue changes
+  useEffect(() => {
+    // Only update the ref if the queue has items
+    if (uploadQueue.length > 0) {
+      lastQueueRef.current = [...uploadQueue];
+      console.log(
+        "📝 Updated lastQueueRef with current queue:",
+        uploadQueue.length,
+        "items"
+      );
+    }
+  }, [uploadQueue]);
 
   const value = {
     uploadQueue,
