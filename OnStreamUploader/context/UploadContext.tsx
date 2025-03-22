@@ -90,6 +90,7 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
   const [completedUploads, setCompletedUploads] = useState<FileUpload[]>([]);
   const [isConnected, setIsConnected] = useState(true);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [testUploads, setTestUploads] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     // Connect to WebSocket server
@@ -537,6 +538,113 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
     }
   };
 
+  const testAddToQueue = () => {
+    // Create a test file with a dummy URI
+    const testFile = {
+      uri: "https://placekitten.com/200/300",
+      name: `test-file-${Date.now()}.jpg`,
+      size: 1024 * 1024, // 1MB
+      type: "image/jpeg",
+    };
+
+    // Create a FileUpload object directly
+    const fileUpload: FileUpload = {
+      fileId: `test-${Date.now()}`,
+      uri: testFile.uri,
+      name: testFile.name,
+      size: testFile.size,
+      type: testFile.type,
+      progress: 0,
+      status: "queued",
+      priority: "normal",
+      error: null,
+      retryCount: 0,
+    };
+
+    console.log("⬆️ ADDING TEST UPLOAD:", fileUpload.fileId);
+
+    // Mark this as a test upload that shouldn't be auto-removed
+    setTestUploads((prev) => new Set([...prev, fileUpload.fileId]));
+
+    // Add directly to queue
+    setUploadQueue((prev) => [...prev, fileUpload]);
+
+    // Switch to queue tab to see the upload
+    setActiveTab("queue");
+
+    // Simulate upload progress
+    let currentProgress = 0;
+    const progressInterval = setInterval(() => {
+      currentProgress += 5;
+
+      // Update progress
+      setUploadQueue((prev) => {
+        // Find the file in the queue
+        const fileExists = prev.some(
+          (item) => item.fileId === fileUpload.fileId
+        );
+
+        // If file doesn't exist, add it back
+        if (!fileExists) {
+          return [
+            ...prev,
+            {
+              ...fileUpload,
+              progress: currentProgress,
+              status: currentProgress > 0 ? "uploading" : "queued",
+            },
+          ];
+        }
+
+        // Update progress
+        return prev.map((item) =>
+          item.fileId === fileUpload.fileId
+            ? {
+                ...item,
+                progress: currentProgress,
+                status: currentProgress > 0 ? "uploading" : "queued",
+              }
+            : item
+        );
+      });
+
+      // Handle completion
+      if (currentProgress >= 100) {
+        clearInterval(progressInterval);
+
+        // Update status to completed
+        setUploadQueue((prev) =>
+          prev.map((item) =>
+            item.fileId === fileUpload.fileId
+              ? { ...item, progress: 100, status: "completed" }
+              : item
+          )
+        );
+
+        // Add to completed uploads
+        setCompletedUploads((prev) => [
+          ...prev,
+          { ...fileUpload, progress: 100, status: "completed" },
+        ]);
+
+        // Remove from queue after delay
+        setTimeout(() => {
+          // Remove from test uploads set
+          setTestUploads((prev) => {
+            const newSet = new Set(prev);
+            newSet.delete(fileUpload.fileId);
+            return newSet;
+          });
+
+          // Remove from queue
+          setUploadQueue((prev) =>
+            prev.filter((item) => item.fileId !== fileUpload.fileId)
+          );
+        }, 5000);
+      }
+    }, 500);
+  };
+
   const value = {
     uploadQueue,
     completedUploads,
@@ -556,6 +664,7 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
     startUpload,
     setUploadQueue,
     setCompletedUploads,
+    testAddToQueue,
   };
 
   return (

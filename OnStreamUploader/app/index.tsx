@@ -127,69 +127,87 @@ export default function Index() {
 
     console.log("⬆️ ADDING TEST UPLOAD:", fileUpload.fileId);
 
-    // Add directly to queue and verify it was added
-    setUploadQueue((prev) => {
-      const newQueue = [...prev, fileUpload];
-      console.log("📋 Queue after adding:", newQueue.length, "items");
-      return newQueue;
-    });
+    // Add directly to queue
+    setUploadQueue((prev) => [...prev, fileUpload]);
+    console.log("📋 Queue after adding:", uploadQueue.length + 1, "items");
 
     // Switch to queue tab to see the upload
     setActiveTab("queue");
 
-    // Simulate upload progress more slowly
-    let progress = 0;
+    // Prevent any external code from removing the file from queue
+    // by creating a local copy of the file state
+    let currentProgress = 0;
+    let isCompleted = false;
+
     const progressInterval = setInterval(() => {
-      progress += 5;
+      // Increment progress
+      currentProgress += 5;
       console.log(
-        `📊 Updating progress for ${fileUpload.fileId}: ${progress}%`
+        `📊 Updating progress for ${fileUpload.fileId}: ${currentProgress}%`
       );
 
+      // Always ensure the file is in the queue by re-adding it if needed
       setUploadQueue((prev) => {
-        // Check if the file is still in the queue
+        // Check if our file is in the queue
         const fileExists = prev.some(
           (item) => item.fileId === fileUpload.fileId
         );
+
         if (!fileExists) {
-          console.log("❌ File not found in queue during progress update!");
-          return prev;
+          console.log("⚠️ File was removed from queue, re-adding it");
+          // Re-add the file with current progress
+          return [
+            ...prev,
+            {
+              ...fileUpload,
+              progress: currentProgress,
+              status: currentProgress >= 100 ? "completed" : "uploading",
+            },
+          ];
         }
 
+        // Update progress if file exists
         return prev.map((item) =>
           item.fileId === fileUpload.fileId
             ? {
                 ...item,
-                progress,
-                status: progress > 0 ? "uploading" : "queued",
+                progress: currentProgress,
+                status: currentProgress > 0 ? "uploading" : "queued",
               }
             : item
         );
       });
 
-      if (progress >= 100) {
+      // Handle completion
+      if (currentProgress >= 100 && !isCompleted) {
+        isCompleted = true;
         clearInterval(progressInterval);
         console.log("✅ Upload complete for:", fileUpload.fileId);
 
-        // Keep in queue for 5 more seconds
+        // Update status to completed but keep in queue
+        setUploadQueue((prev) =>
+          prev.map((item) =>
+            item.fileId === fileUpload.fileId
+              ? { ...item, progress: 100, status: "completed" }
+              : item
+          )
+        );
+
+        // Add to completed uploads
+        setCompletedUploads((prev) => [
+          ...prev,
+          { ...fileUpload, progress: 100, status: "completed" },
+        ]);
+
+        // Remove from queue after a longer delay (10 seconds)
         setTimeout(() => {
-          console.log("🏁 Moving to completed uploads:", fileUpload.fileId);
-
-          // Add to completed uploads
-          setCompletedUploads((prev) => [
-            ...prev,
-            { ...fileUpload, progress: 100, status: "completed" },
-          ]);
-
-          // Remove from queue after delay
-          setTimeout(() => {
-            console.log("🗑️ Removing from queue:", fileUpload.fileId);
-            setUploadQueue((prev) =>
-              prev.filter((item) => item.fileId !== fileUpload.fileId)
-            );
-          }, 5000);
-        }, 1000);
+          console.log("🗑️ Removing from queue:", fileUpload.fileId);
+          setUploadQueue((prev) =>
+            prev.filter((item) => item.fileId !== fileUpload.fileId)
+          );
+        }, 10000);
       }
-    }, 300);
+    }, 500); // Slower interval for better visibility
   };
 
   return (
