@@ -10,6 +10,7 @@ import {
   getDownloadURL,
 } from "firebase/storage";
 import { storage } from "../config/firebase";
+import { Platform } from "react-native";
 
 class UploadService {
   private uploadQueue: FileUpload[] = [];
@@ -287,64 +288,73 @@ export const mockUploadFile = async (file: File | Blob, metadata?: any) => {
 };
 
 // Update the uploadFile function to use Firebase
-export const uploadFile = async (file: FileUpload): Promise<string> => {
+export const uploadFile = async (
+  file: FileUpload,
+  options?: {
+    onProgress?: (progress: number) => void;
+    onError?: (error: Error) => void;
+  }
+) => {
   try {
-    console.log(`Beginning Firebase upload for ${file.name}`);
+    console.log(`Starting upload for ${file.name} to Firebase`);
 
-    // Create a reference to the storage location
+    // Create a reference to the file in Firebase Storage
     const storageRef = ref(storage, `uploads/chunks/${file.fileId}-chunk-0`);
 
-    // Get the file data
-    const response = await fetch(file.uri);
-    const blob = await response.blob();
-
-    // Create upload task
-    const uploadTask = uploadBytesResumable(storageRef, blob);
-
-    // Monitor upload progress
-    uploadTask.on(
-      "state_changed",
-      (snapshot) => {
-        // Calculate progress
-        const progress = Math.round(
-          (snapshot.bytesTransferred / snapshot.totalBytes) * 100
-        );
-
-        // Log progress
-        console.log(
-          `Firebase upload progress for ${file.name}: ${progress.toFixed(1)}%`
-        );
-
-        // Notify about progress via WebSocket
-        websocketService.notifyUploadProgress(file.fileId, progress);
-      },
-      (error) => {
-        // Handle unsuccessful uploads
-        console.error(`Firebase upload error for ${file.name}:`, error);
-        websocketService.updateFileStatus(file.fileId, "failed", error.message);
-        throw error;
-      }
+    // Create the upload task
+    const uploadTask = uploadBytesResumable(
+      storageRef,
+      await fetchFileData(file.uri)
     );
 
-    // Wait for upload to complete
-    await uploadTask;
+    // Set up progress monitoring
+    return new Promise((resolve, reject) => {
+      uploadTask.on(
+        "state_changed",
+        (snapshot) => {
+          // Calculate and report progress
+          const progress = Math.round(
+            (snapshot.bytesTransferred / snapshot.totalBytes) * 100
+          );
+          console.log(
+            `Firebase upload progress for ${file.name}: ${progress}%`
+          );
 
-    // Get download URL
-    const downloadURL = await getDownloadURL(storageRef);
+          // Call the onProgress callback if provided
+          if (options?.onProgress) {
+            options.onProgress(progress);
+          }
+        },
+        (error) => {
+          // Handle errors
+          console.error(`Firebase upload error for ${file.name}:`, error);
+          if (options?.onError) {
+            options.onError(error);
+          }
+          reject(error);
+        },
+        async () => {
+          // Upload completed successfully
+          console.log(`Firebase upload completed for ${file.name}`);
 
-    console.log(`Firebase upload completed for ${file.name}`);
+          // Get the download URL
+          const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
 
-    // Update file status
-    websocketService.updateFileStatus(file.fileId, "completed");
-
-    return downloadURL;
-  } catch (error: unknown) {
-    console.error(`Error uploading ${file.name}:`, error);
-    websocketService.updateFileStatus(
-      file.fileId,
-      "failed",
-      error instanceof Error ? error.message : String(error)
-    );
+          // Return the result
+          resolve({
+            url: downloadURL,
+            size: file.size,
+            type: file.type,
+            name: file.name,
+          });
+        }
+      );
+    });
+  } catch (error) {
+    console.error(`Error in uploadFile for ${file.name}:`, error);
+    if (options?.onError) {
+      options.onError(error as Error);
+    }
     throw error;
   }
 };
@@ -595,4 +605,61 @@ const simulateSlowUpload = async (file: FileUpload): Promise<void> => {
       reject(error);
     }
   });
+};
+
+// Add this function to fetch file data from a URI
+const fetchFileData = async (uri: string): Promise<Blob> => {
+  console.log(`Fetching file data from URI: ${uri}`);
+
+  try {
+    // For web platform, handle data URIs and remote URLs
+    if (Platform.OS === "web") {
+      if (uri.startsWith("data:")) {
+        // Handle data URI
+        const response = await fetch(uri);
+        return await response.blob();
+      } else {
+        // Handle remote URL
+        const response = await fetch(uri);
+        return await response.blob();
+      }
+    } else {
+      // For native platforms, use FileSystem
+      const fileInfo = await FileSystem.getInfoAsync(uri);
+
+      if (!fileInfo.exists) {
+        throw new Error(`File does not exist at URI: ${uri}`);
+      }
+
+      // Read the file as base64
+      const base64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      // Convert base64 to blob
+      const blob = await new Promise<Blob>((resolve) => {
+        const byteCharacters = atob(base64);
+        const byteArrays = [];
+
+        for (let offset = 0; offset < byteCharacters.length; offset += 512) {
+          const slice = byteCharacters.slice(offset, offset + 512);
+
+          const byteNumbers = new Array(slice.length);
+          for (let i = 0; i < slice.length; i++) {
+            byteNumbers[i] = slice.charCodeAt(i);
+          }
+
+          const byteArray = new Uint8Array(byteNumbers);
+          byteArrays.push(byteArray);
+        }
+
+        resolve(new Blob(byteArrays));
+      });
+
+      return blob;
+    }
+  } catch (error) {
+    console.error(`Error fetching file data from URI: ${uri}`, error);
+    throw error;
+  }
 };
