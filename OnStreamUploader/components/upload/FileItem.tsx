@@ -43,8 +43,8 @@ interface FileItemProps {
   onReorder?: (fileId: string, newPosition: number) => void;
   onPause?: () => void;
   onResume?: () => void;
-  onCancel?: () => void;
-  onRetry?: () => boolean;
+  onCancel?: () => boolean | Promise<boolean>;
+  onRetry?: () => boolean | Promise<boolean>;
 }
 
 // Add this type definition for the gesture context

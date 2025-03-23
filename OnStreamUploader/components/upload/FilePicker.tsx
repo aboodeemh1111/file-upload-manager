@@ -6,6 +6,7 @@ import { IconSymbol } from "@/components/ui/IconSymbol";
 import { useUpload } from "@/context/UploadContext";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
+import uploadService from "../../services/uploadService";
 
 export default function FilePicker() {
   const { addToQueue } = useUpload();

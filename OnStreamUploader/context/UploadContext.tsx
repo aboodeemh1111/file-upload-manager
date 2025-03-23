@@ -7,7 +7,7 @@ import React, {
   useCallback,
   useRef,
 } from "react";
-import uploadService, { uploadFile } from "../services/uploadService";
+import uploadService from "../services/uploadService";
 import { FileUpload } from "@/types/FileUpload";
 import websocketService, {
   UploadProgressData,
@@ -28,18 +28,18 @@ interface UploadContextType {
     files: Array<{ uri: string; name: string; size: number; type: string }>,
     priority?: "high" | "normal" | "low"
   ) => FileUpload[];
-  removeFromQueue: (fileId: string) => boolean;
+  removeFromQueue: (fileId: string) => Promise<void>;
   updatePriority: (
     fileId: string,
     priority: "high" | "normal" | "low"
-  ) => boolean;
-  pauseUpload: (fileId: string) => void;
-  resumeUpload: (fileId: string) => void;
-  cancelUpload: (fileId: string) => boolean;
+  ) => Promise<boolean>;
+  pauseUpload: (fileId: string) => Promise<void>;
+  resumeUpload: (fileId: string) => Promise<void>;
+  cancelUpload: (fileId: string) => Promise<boolean>;
   pickDocument: () => Promise<void>;
   pickImage: () => Promise<void>;
   pickVideo: () => Promise<void>;
-  retryUpload: (fileId: string) => boolean;
+  retryUpload: (fileId: string) => Promise<boolean>;
   reorderQueue: (
     fileId: string,
     newPosition: number,
@@ -228,7 +228,7 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
 
       console.log("Starting upload for file:", file.name);
 
-      const url = await uploadFile(file);
+      const url = await uploadService.uploadFile(file);
       console.log(`Upload complete for ${file.name}, URL:`, url);
 
       // Update status to completed but keep in queue
@@ -284,8 +284,10 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
           uri: file.uri,
           progress: 0,
           status: "queued",
-          priority,
+          priority: priority || "normal",
           addedAt: new Date().toISOString(),
+          error: null,
+          retryCount: 0,
         };
       });
 
@@ -319,53 +321,36 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
     []
   );
 
-  const removeFromQueue = useCallback((fileId: string) => {
-    const result = uploadService.removeFromQueue(fileId);
-    if (result) {
-      setUploadQueue((prev) => prev.filter((file) => file.fileId !== fileId));
-      setCompletedUploads((prev) =>
-        prev.filter((file) => file.fileId !== fileId)
-      );
-    }
-    return result;
+  const removeFromQueue = useCallback(async (fileId: string) => {
+    await uploadService.removeFromQueue(fileId);
   }, []);
 
-  const updatePriority = (
-    fileId: string,
-    priority: "high" | "normal" | "low"
-  ) => {
-    const result = uploadService.updatePriority(fileId, priority);
-    if (result) {
-      setUploadQueue([...uploadService.getQueue()]);
-    }
-    return result;
-  };
+  const updatePriority = useCallback(
+    async (fileId: string, priority: "high" | "normal" | "low") => {
+      const success = await uploadService.updatePriority(fileId, priority);
+      if (success) {
+        setUploadQueue([...uploadService.getQueue()]);
+      }
+      return success;
+    },
+    []
+  );
 
-  const pauseUpload = (fileId: string) => {
-    uploadService.pauseUpload(fileId);
-    setUploadQueue((prev) =>
-      prev.map((file) =>
-        file.fileId === fileId ? { ...file, status: "paused" } : file
-      )
-    );
-  };
+  const pauseUpload = useCallback(async (fileId: string) => {
+    await uploadService.pauseUpload(fileId);
+  }, []);
 
-  const resumeUpload = (fileId: string) => {
-    uploadService.resumeUpload(fileId);
-    setUploadQueue((prev) =>
-      prev.map((file) =>
-        file.fileId === fileId ? { ...file, status: "queued" } : file
-      )
-    );
-  };
+  const resumeUpload = useCallback(async (fileId: string) => {
+    await uploadService.resumeUpload(fileId);
+  }, []);
 
-  const cancelUpload = (fileId: string) => {
-    const result = uploadService.cancelUpload(fileId);
-    if (result) {
+  const cancelUpload = useCallback(async (fileId: string) => {
+    const success = await uploadService.cancelUpload(fileId);
+    if (success) {
       setUploadQueue((prev) => prev.filter((file) => file.fileId !== fileId));
     }
-    return result;
-  };
+    return success;
+  }, []);
 
   const pickDocument = async () => {
     try {
@@ -402,36 +387,36 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
     }
   };
 
-  const pickImage = async () => {
+  const pickImage = async (): Promise<void> => {
     try {
+      // Allow multiple selection with allowsMultipleSelection: true
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsMultipleSelection: true,
+        allowsEditing: false,
         quality: 1,
+        allowsMultipleSelection: true, // Enable multiple selection
       });
 
-      if (!result.canceled && result.assets && result.assets.length > 0) {
+      if (!result.canceled) {
         console.log("Images picked:", result.assets);
 
-        // Create file objects
-        const files = result.assets.map((file) => ({
-          uri: file.uri,
-          name: file.fileName || `image-${Date.now()}.jpg`,
-          size: file.fileSize || 0,
-          type: file.mimeType || "image/jpeg",
+        // Map the selected assets to the format expected by addToQueue
+        const files = result.assets.map((asset) => ({
+          uri: asset.uri,
+          name: asset.fileName || `image-${Date.now()}.jpg`,
+          size: Number(asset.fileSize || 0),
+          type: asset.mimeType || "image/jpeg",
         }));
 
-        // Add to queue - this will trigger UI update
-        const uploads = addToQueue(files);
+        // Add files to queue
+        addToQueue(files);
 
-        // Log the queue state after adding
-        console.log("Queue after adding in pickImage:", uploadQueue.length);
-
-        return uploads;
+        // Don't return anything (void)
       }
     } catch (error) {
       console.error("Error picking image:", error);
     }
+    // No return value needed
   };
 
   const pickVideo = async () => {
@@ -457,7 +442,7 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
           progress: 0,
           status: "queued",
           priority: "normal",
-          createdAt: new Date().toISOString(),
+          addedAt: new Date().toISOString(),
           error: null,
           retryCount: 0,
         };
@@ -480,13 +465,13 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
     }
   };
 
-  const retryUpload = (fileId: string) => {
-    const result = uploadService.retryUpload(fileId);
-    if (result) {
+  const retryUpload = useCallback(async (fileId: string) => {
+    const success = await uploadService.retryUpload(fileId);
+    if (success) {
       setUploadQueue(uploadService.getQueue());
     }
-    return result;
-  };
+    return success;
+  }, []);
 
   // Add this function to reorder the queue
   const reorderQueue = (
@@ -524,88 +509,12 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
   };
 
   // Fix the startUpload function to properly handle video uploads and prevent duplicates
-  const startUpload = async (file: FileUpload) => {
+  const startUpload = (file: FileUpload) => {
+    console.log(`Starting upload for ${file.name}...`);
     try {
-      console.log(`Starting upload for ${file.name}...`);
-
-      // Update file status to uploading
-      setUploadQueue((prev) =>
-        prev.map((f) =>
-          f.fileId === file.fileId
-            ? { ...f, status: "uploading", progress: 0 }
-            : f
-        )
-      );
-
-      // Start the upload process
-      const result = await uploadFile(file, {
-        onProgress: (progress) => {
-          console.log(`Upload progress for ${file.name}: ${progress}%`);
-          updateProgress(file.fileId, progress);
-        },
-        onError: (error) => {
-          console.error(`Upload error for ${file.name}:`, error);
-          setUploadQueue((prev) =>
-            prev.map((f) =>
-              f.fileId === file.fileId
-                ? { ...f, status: "error", error: error.message }
-                : f
-            )
-          );
-        },
-      });
-
-      console.log("Upload result:", result);
-
-      // Check if the file is already in completed uploads to prevent duplicates
-      setCompletedUploads((prev) => {
-        const fileExists = prev.some((f) => f.fileId === file.fileId);
-
-        if (fileExists) {
-          // Update the existing file instead of adding a new one
-          return prev.map((f) =>
-            f.fileId === file.fileId
-              ? { ...f, progress: 100, status: "completed", result }
-              : f
-          );
-        } else {
-          // Add the file to completed uploads
-          return [
-            ...prev,
-            {
-              ...file,
-              progress: 100,
-              status: "completed",
-              result,
-            },
-          ];
-        }
-      });
-
-      // Only remove from queue AFTER adding to completed uploads
-      setTimeout(() => {
-        setUploadQueue((prev) => prev.filter((f) => f.fileId !== file.fileId));
-      }, 500);
-
-      return result;
+      uploadService.uploadFile(file);
     } catch (error) {
       console.error(`Error uploading ${file.name}:`, error);
-
-      // Update file status to error
-      setUploadQueue((prev) =>
-        prev.map((f) =>
-          f.fileId === file.fileId
-            ? {
-                ...f,
-                status: "error",
-                error: error instanceof Error ? error.message : String(error),
-                retryCount: f.retryCount + 1,
-              }
-            : f
-        )
-      );
-
-      throw error;
     }
   };
 
@@ -630,6 +539,7 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
       priority: "normal",
       error: null,
       retryCount: 0,
+      addedAt: new Date().toISOString(),
     };
 
     console.log("⬆️ ADDING TEST UPLOAD:", fileUpload.fileId);
@@ -639,9 +549,6 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
 
     // Add directly to queue
     setUploadQueue((prev) => [...prev, fileUpload]);
-
-    // Switch to queue tab to see the upload
-    setActiveTab("queue");
 
     // Simulate upload progress
     let currentProgress = 0;

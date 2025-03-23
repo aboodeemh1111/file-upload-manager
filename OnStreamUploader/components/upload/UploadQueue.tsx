@@ -101,8 +101,14 @@ const UploadQueue = () => {
     return (
       <FileItem
         file={item}
-        onCancel={() => cancelUpload(item.fileId)}
-        onRetry={() => retryUpload(item.fileId)}
+        onCancel={async () => {
+          await cancelUpload(item.fileId);
+          return true;
+        }}
+        onRetry={async () => {
+          await retryUpload(item.fileId);
+          return true;
+        }}
       />
     );
   };

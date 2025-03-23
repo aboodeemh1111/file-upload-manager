@@ -10,4 +10,6 @@ export interface FileUpload {
   error: string | null;
   retryCount: number;
   completedAt?: number;
+  addedAt: string;
+  downloadUrl?: string;
 }

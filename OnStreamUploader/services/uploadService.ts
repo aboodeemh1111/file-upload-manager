@@ -12,754 +12,6 @@ import {
 import { storage } from "../config/firebase";
 import { Platform } from "react-native";
 
-class UploadService {
-  private uploadQueue: FileUpload[] = [];
-  private activeUploads: Map<string, boolean> = new Map(); // Track active uploads by fileId
-  private isUploading = false;
-  private maxConcurrentUploads = 3; // Allow 3 concurrent uploads
-  private serverUrl = "http://localhost:3000"; // Update with your server URL
-
-  constructor() {
-    // Initialize listeners for WebSocket events
-    websocketService.addListener(
-      "upload_status",
-      this.handleStatusUpdate.bind(this)
-    );
-  }
-
-  private handleStatusUpdate(data: {
-    fileId: string;
-    status: string;
-    error?: string;
-  }) {
-    const fileIndex = this.uploadQueue.findIndex(
-      (file) => file.fileId === data.fileId
-    );
-
-    if (fileIndex !== -1) {
-      // Update the file status but keep it in the queue
-      this.uploadQueue[fileIndex].status = data.status as any;
-      if (data.error) {
-        this.uploadQueue[fileIndex].error = data.error;
-      }
-
-      // Only reset the current upload if it's completed or failed
-      if (data.status === "completed" || data.status === "failed") {
-        // If the current upload is completed, process the next file
-        if (this.activeUploads.has(data.fileId)) {
-          this.activeUploads.delete(data.fileId);
-          this.processQueue();
-        }
-      }
-    }
-  }
-
-  getQueue(): FileUpload[] {
-    return [...this.uploadQueue];
-  }
-
-  addToQueue(
-    files: Array<{ uri: string; name: string; size: number; type: string }>,
-    priority: "high" | "normal" | "low" = "normal"
-  ) {
-    console.log(`Adding files to queue: ${files.length}`);
-
-    // Convert files to FileUpload objects with unique IDs
-    const newFiles = files.map((file) => ({
-      ...file,
-      fileId: uuidv4(),
-      status: "queued" as const,
-      progress: 0,
-      priority,
-      createdAt: new Date().toISOString(),
-      error: null,
-      retryCount: 0,
-    }));
-
-    // Check for duplicates before adding
-    const filesToAdd = newFiles.filter((file) => {
-      // Check if this file is already in the queue (by name)
-      const existingFile = this.uploadQueue.find(
-        (existing) => existing.name === file.name
-      );
-
-      if (existingFile) {
-        console.log(`File ${file.name} is already in queue, skipping`);
-        return false;
-      }
-
-      return true;
-    });
-
-    // Add new files to the queue
-    this.uploadQueue = [...this.uploadQueue, ...filesToAdd];
-
-    console.log(`Queue after adding files: ${this.uploadQueue.length}`);
-
-    // Notify about the updated queue
-    websocketService.updateQueue(this.uploadQueue);
-
-    // Start processing the queue
-    this.processQueue();
-
-    return filesToAdd;
-  }
-
-  removeFromQueue(fileId: string): boolean {
-    const index = this.uploadQueue.findIndex((file) => file.fileId === fileId);
-
-    if (index !== -1) {
-      this.uploadQueue.splice(index, 1);
-      return true;
-    }
-
-    return false;
-  }
-
-  updatePriority(fileId: string, priority: "high" | "normal" | "low"): boolean {
-    const file = this.uploadQueue.find((file) => file.fileId === fileId);
-
-    if (file) {
-      file.priority = priority;
-      // Re-sort queue based on priority
-      this.sortQueue();
-      return true;
-    }
-
-    return false;
-  }
-
-  private sortQueue() {
-    const priorityOrder = { high: 0, normal: 1, low: 2 };
-
-    this.uploadQueue.sort((a, b) => {
-      return priorityOrder[a.priority] - priorityOrder[b.priority];
-    });
-  }
-
-  processQueue() {
-    // Count current active uploads
-    const currentActiveUploads = this.activeUploads.size;
-
-    // If we've reached the maximum concurrent uploads, don't start more
-    if (currentActiveUploads >= this.maxConcurrentUploads) {
-      console.log(
-        `Already at max concurrent uploads (${currentActiveUploads}/${this.maxConcurrentUploads})`
-      );
-      return;
-    }
-
-    // Sort queue by priority
-    this.sortQueue();
-
-    // Find files that are queued and not currently uploading
-    const queuedFiles = this.uploadQueue.filter(
-      (file) => file.status === "queued" && !this.activeUploads.has(file.fileId)
-    );
-
-    if (queuedFiles.length === 0) {
-      console.log("No files to upload in the queue");
-      return;
-    }
-
-    // Calculate how many more uploads we can start
-    const availableSlots = this.maxConcurrentUploads - currentActiveUploads;
-    const filesToStart = queuedFiles.slice(0, availableSlots);
-
-    // Start uploads for each file
-    filesToStart.forEach((file) => {
-      // Mark this file as uploading
-      const fileIndex = this.uploadQueue.findIndex(
-        (f) => f.fileId === file.fileId
-      );
-
-      if (fileIndex !== -1) {
-        // Update status
-        this.uploadQueue[fileIndex].status = "uploading";
-
-        // Track this as an active upload
-        this.activeUploads.set(file.fileId, true);
-
-        // Start the upload
-        console.log(`Starting upload for ${file.name}...`);
-        this.uploadFile(file);
-      }
-    });
-
-    // Notify about the updated queue
-    websocketService.updateQueue(this.uploadQueue);
-  }
-
-  async uploadFile(
-    file: FileUpload,
-    options?: {
-      onProgress?: (progress: number) => void;
-      onError?: (error: Error) => void;
-    }
-  ): Promise<any> {
-    console.log(`Starting upload for ${file.name} to Firebase`);
-
-    try {
-      // Get file data
-      const fileData = await fetchFileData(file.uri);
-
-      // Create a reference to the file in Firebase Storage
-      const storageRef = ref(storage, `uploads/${file.fileId}/${file.name}`);
-
-      // Create upload task
-      const uploadTask = uploadBytesResumable(storageRef, fileData);
-
-      return new Promise((resolve, reject) => {
-        // Track the highest progress value we've seen
-        let highestProgress = 0;
-
-        uploadTask.on(
-          "state_changed",
-          (snapshot) => {
-            // Calculate upload progress
-            const progress = Math.round(
-              (snapshot.bytesTransferred / snapshot.totalBytes) * 100
-            );
-
-            console.log(
-              `Firebase upload progress for ${file.name}: ${progress}%`
-            );
-
-            // Only update progress if it's higher than what we've seen before
-            if (progress > highestProgress) {
-              highestProgress = progress;
-
-              // Update the file in the queue
-              const fileIndex = this.uploadQueue.findIndex(
-                (f) => f.fileId === file.fileId
-              );
-              if (fileIndex !== -1) {
-                this.uploadQueue[fileIndex].progress = progress;
-
-                // Notify about the updated queue
-                websocketService.updateQueue(this.uploadQueue);
-              }
-
-              // Call the onProgress callback if provided
-              if (options?.onProgress) {
-                options.onProgress(progress);
-              }
-            }
-          },
-          (error) => {
-            console.error(`Error in uploadFile for ${file.name}:`, error);
-
-            // Update file status in queue
-            const fileIndex = this.uploadQueue.findIndex(
-              (f) => f.fileId === file.fileId
-            );
-            if (fileIndex !== -1) {
-              this.uploadQueue[fileIndex].status = "failed";
-              this.uploadQueue[fileIndex].error =
-                error.message || String(error);
-
-              // Notify about the updated queue
-              websocketService.updateQueue(this.uploadQueue);
-            }
-
-            if (options?.onError) {
-              options.onError(error as Error);
-            }
-            reject(error);
-          },
-          async () => {
-            console.log(`Firebase upload completed for ${file.name}`);
-
-            // Update file status in queue
-            const fileIndex = this.uploadQueue.findIndex(
-              (f) => f.fileId === file.fileId
-            );
-            if (fileIndex !== -1) {
-              this.uploadQueue[fileIndex].status = "completed";
-              this.uploadQueue[fileIndex].progress = 100;
-
-              // Notify about the updated queue
-              websocketService.updateQueue(this.uploadQueue);
-            }
-
-            // Get download URL
-            const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-
-            // Return file info
-            resolve({
-              url: downloadURL,
-              size: uploadTask.snapshot.totalBytes,
-              type: file.type,
-              name: file.name,
-            });
-          }
-        );
-      });
-    } catch (error) {
-      console.error(`Error in uploadFile for ${file.name}:`, error);
-      if (options?.onError) {
-        options.onError(error as Error);
-      }
-      throw error;
-    }
-  }
-
-  pauseUpload(fileId: string) {
-    const file = this.uploadQueue.find((f) => f.fileId === fileId);
-    if (file) {
-      file.status = "paused";
-      websocketService.pauseUpload(fileId);
-
-      if (this.activeUploads.has(fileId)) {
-        this.activeUploads.delete(fileId);
-        this.processQueue();
-      }
-    }
-  }
-
-  resumeUpload(fileId: string) {
-    const file = this.uploadQueue.find((f) => f.fileId === fileId);
-    if (file) {
-      file.status = "queued";
-      websocketService.resumeUpload(fileId);
-
-      if (!this.activeUploads.has(fileId)) {
-        this.processQueue();
-      }
-    }
-  }
-
-  cancelUpload(fileId: string): boolean {
-    if (this.activeUploads.has(fileId)) {
-      // Cancel current upload
-      websocketService.cancelUpload(fileId);
-      this.activeUploads.delete(fileId);
-      this.removeFromQueue(fileId);
-      this.processQueue();
-      return true;
-    } else {
-      // Remove from queue
-      return this.removeFromQueue(fileId);
-    }
-  }
-
-  retryUpload(fileId: string): boolean {
-    const file = this.uploadQueue.find((f) => f.fileId === fileId);
-    if (file && file.status === "failed") {
-      file.status = "queued";
-      file.error = null;
-
-      if (!this.activeUploads.has(fileId)) {
-        this.processQueue();
-      }
-      return true;
-    }
-    return false;
-  }
-
-  updateProgress(fileId: string, progress: number) {
-    console.log(`📊 Updating progress for ${fileId}: ${progress}%`);
-
-    // Find the file in the queue
-    const fileIndex = this.uploadQueue.findIndex(
-      (file) => file.fileId === fileId
-    );
-
-    if (fileIndex === -1) {
-      console.warn(
-        `⚠️ File with ID ${fileId} not found in queue, ignoring progress update`
-      );
-      return; // Skip updates for files not in the queue
-    }
-
-    // Update the progress
-    this.uploadQueue[fileIndex] = {
-      ...this.uploadQueue[fileIndex],
-      progress,
-      status: progress === 100 ? "completed" : "uploading",
-    };
-
-    // Notify about the updated queue
-    console.log(
-      `📝 Updated queue with progress ${progress}% for file ${this.uploadQueue[fileIndex].name}`
-    );
-    websocketService.updateQueue(this.uploadQueue);
-
-    // If upload is complete, process next files in queue
-    if (progress === 100) {
-      console.log(`✅ Upload complete for: ${fileId}`);
-      this.activeUploads.delete(fileId);
-      this.processQueue(); // Process next files
-    }
-  }
-
-  completeUpload(fileId: string) {
-    this.removeFromQueue(fileId);
-  }
-
-  failUpload(fileId: string, errorMessage: string) {
-    const file = this.uploadQueue.find((f) => f.fileId === fileId);
-    if (file) {
-      file.status = "failed";
-      file.error = errorMessage;
-    }
-  }
-}
-
-export default new UploadService();
-
-// First uploadFile function (mock implementation)
-export const mockUploadFile = async (file: File | Blob, metadata?: any) => {
-  // Simulate network delay
-  await new Promise((resolve) => setTimeout(resolve, 1500));
-
-  // Return a mock successful response
-  return {
-    success: true,
-    url: "https://example.com/mock-upload-url",
-    name:
-      typeof file === "object" && "name" in file ? file.name : "uploaded-file",
-    size: file.size,
-    type: file.type,
-    metadata,
-  };
-};
-
-// Update the uploadFile function to use Firebase
-export const uploadFile = async (
-  file: FileUpload,
-  options?: {
-    onProgress?: (progress: number) => void;
-    onError?: (error: Error) => void;
-  }
-): Promise<any> => {
-  console.log(`Starting upload for ${file.name} to Firebase`);
-
-  try {
-    // Get file data
-    const fileData = await fetchFileData(file.uri);
-
-    // Create a reference to the file in Firebase Storage
-    const storageRef = ref(storage, `uploads/${file.fileId}/${file.name}`);
-
-    // Create upload task
-    const uploadTask = uploadBytesResumable(storageRef, fileData);
-
-    return new Promise((resolve, reject) => {
-      // Track the highest progress value we've seen
-      let highestProgress = 0;
-
-      uploadTask.on(
-        "state_changed",
-        (snapshot) => {
-          // Calculate upload progress
-          const progress = Math.round(
-            (snapshot.bytesTransferred / snapshot.totalBytes) * 100
-          );
-
-          console.log(
-            `Firebase upload progress for ${file.name}: ${progress}%`
-          );
-
-          // Only update progress if it's higher than what we've seen before
-          if (progress > highestProgress) {
-            highestProgress = progress;
-            // Call the onProgress callback if provided
-            if (options?.onProgress) {
-              options.onProgress(progress);
-            }
-          }
-        },
-        (error) => {
-          console.error(`Error in uploadFile for ${file.name}:`, error);
-          if (options?.onError) {
-            options.onError(error as Error);
-          }
-          reject(error);
-        },
-        async () => {
-          console.log(`Firebase upload completed for ${file.name}`);
-
-          // Get download URL
-          const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-
-          // Return file info
-          resolve({
-            url: downloadURL,
-            size: uploadTask.snapshot.totalBytes,
-            type: file.type,
-            name: file.name,
-          });
-        }
-      );
-    });
-  } catch (error) {
-    console.error(`Error in uploadFile for ${file.name}:`, error);
-    if (options?.onError) {
-      options.onError(error as Error);
-    }
-    throw error;
-  }
-};
-
-// Add this function to your uploadService.ts file
-const uploadToFirebase = async (
-  file: FileUpload,
-  onProgress: (progress: number) => void
-): Promise<string> => {
-  // Get the file data as a blob
-  const response = await fetch(file.uri);
-  const blob = await response.blob();
-
-  // For large files (>10MB), use chunked upload
-  if (blob.size > 10 * 1024 * 1024) {
-    return uploadLargeFileInChunks(file, blob, onProgress);
-  }
-
-  // Regular upload for smaller files
-  const storageRef = ref(storage, `uploads/${file.fileId}-${file.name}`);
-  const uploadTask = uploadBytesResumable(storageRef, blob);
-
-  return new Promise((resolve, reject) => {
-    // Listen for state changes, errors, and completion
-    uploadTask.on(
-      "state_changed",
-      (snapshot) => {
-        // Get upload progress
-        const progress =
-          (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-        onProgress(progress);
-      },
-      (error) => {
-        // Handle errors
-        reject(error);
-      },
-      async () => {
-        // Handle successful upload
-        const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-        resolve(downloadURL);
-      }
-    );
-  });
-};
-
-// Add chunked upload implementation
-const uploadLargeFileInChunks = async (
-  file: FileUpload,
-  blob: Blob,
-  onProgress: (progress: number) => void
-): Promise<string> => {
-  const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB chunks
-  const totalChunks = Math.ceil(blob.size / CHUNK_SIZE);
-  const storageRef = ref(storage, `uploads/${file.fileId}-${file.name}`);
-
-  // Store upload metadata for resumability
-  const metadata = {
-    customMetadata: {
-      originalName: file.name,
-      fileId: file.fileId,
-      totalChunks: totalChunks.toString(),
-      totalSize: blob.size.toString(),
-    },
-  };
-
-  let uploadedBytes = 0;
-
-  for (let i = 0; i < totalChunks; i++) {
-    const start = i * CHUNK_SIZE;
-    const end = Math.min(blob.size, start + CHUNK_SIZE);
-    const chunk = blob.slice(start, end);
-
-    // Upload this chunk
-    const chunkRef = ref(storage, `uploads/chunks/${file.fileId}-chunk-${i}`);
-    const chunkTask = uploadBytesResumable(chunkRef, chunk);
-
-    await new Promise<void>((resolve, reject) => {
-      chunkTask.on(
-        "state_changed",
-        (snapshot) => {
-          uploadedBytes = start + snapshot.bytesTransferred;
-          const progress = (uploadedBytes / blob.size) * 100;
-          onProgress(progress);
-        },
-        reject,
-        resolve
-      );
-    });
-  }
-
-  // All chunks uploaded, create final file
-  // In a production app, you'd use a Cloud Function to combine chunks
-
-  // For now, return the URL of the first chunk as a placeholder
-  const downloadURL = await getDownloadURL(
-    ref(storage, `uploads/chunks/${file.fileId}-chunk-0`)
-  );
-  return downloadURL;
-};
-
-// Add these helper functions for notifying listeners
-const notifyProgressListeners = (fileId: string, progress: number) => {
-  websocketService.notifyListeners("upload_progress", {
-    fileId,
-    progress,
-  });
-};
-
-const notifyStatusListeners = (
-  fileId: string,
-  status: string,
-  error?: string
-) => {
-  websocketService.notifyListeners("upload_status", {
-    fileId,
-    status,
-    error,
-  });
-};
-
-// Helper to determine if a file should be compressed
-const shouldCompress = (file: FileUpload): boolean => {
-  // Compress images and certain document types
-  const compressibleTypes = [
-    "image/jpeg",
-    "image/png",
-    "image/webp",
-    "application/pdf",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  ];
-
-  // Don't compress if already small
-  if (file.size < 1 * 1024 * 1024) return false; // Skip if < 1MB
-
-  return compressibleTypes.includes(file.type);
-};
-
-// Compress file before upload
-const compressFile = async (file: FileUpload): Promise<FileUpload> => {
-  // For images, use image-manipulation library
-  if (file.type.startsWith("image/")) {
-    // This would use a library like react-native-image-manipulator
-    // For this example, we'll just simulate compression
-    return {
-      ...file,
-      size: Math.floor(file.size * 0.7), // Simulate 30% reduction
-      uri: file.uri, // In real implementation, this would be the compressed file URI
-    };
-  }
-
-  // For other file types, you'd use appropriate compression techniques
-  return file;
-};
-
-// Modify uploadService.ts to simulate slower uploads in development
-let uploadQueue: FileUpload[] = [];
-let isUploading = false;
-
-// Add artificial delay for progress updates in development
-const SIMULATE_SLOW_UPLOAD = process.env.NODE_ENV === "development";
-const PROGRESS_STEPS = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100];
-const STEP_DELAY = 1000; // ms between progress updates
-
-// Process the upload queue
-const processQueue = async () => {
-  if (isUploading || uploadQueue.length === 0) return;
-
-  isUploading = true;
-  const nextFile = uploadQueue.find((file) => file.status === "queued");
-
-  if (!nextFile) {
-    isUploading = false;
-    return;
-  }
-
-  try {
-    console.log(`Starting upload for file: ${nextFile.name}`);
-
-    // Update file status to uploading
-    nextFile.status = "uploading";
-    nextFile.progress = 0;
-    websocketService.updateFileStatus(nextFile.fileId, "uploading");
-
-    // Start the upload process
-    if (SIMULATE_SLOW_UPLOAD) {
-      await simulateSlowUpload(nextFile);
-    } else {
-      await uploadFile(nextFile, {
-        onProgress: (progress) => {
-          nextFile.progress = progress;
-          websocketService.updateUploadProgress(nextFile.fileId, progress);
-        },
-        onError: (error) => {
-          nextFile.status = "failed";
-          nextFile.error =
-            error instanceof Error ? error.message : String(error);
-        },
-      });
-    }
-
-    // Continue with next file
-    isUploading = false;
-    processQueue();
-  } catch (error: unknown) {
-    console.error(`Error uploading file ${nextFile.name}:`, error);
-
-    // Update file status to failed
-    uploadQueue = uploadQueue.map((file) =>
-      file.fileId === nextFile.fileId
-        ? {
-            ...file,
-            status: "failed",
-            error: error instanceof Error ? error.message : String(error),
-          }
-        : file
-    );
-
-    websocketService.updateFileStatus(
-      nextFile.fileId,
-      "failed",
-      error instanceof Error ? error.message : String(error)
-    );
-
-    // Continue with next file
-    isUploading = false;
-    processQueue();
-  }
-};
-
-// Simulate a slow upload with progress updates
-const simulateSlowUpload = async (file: FileUpload): Promise<void> => {
-  return new Promise(async (resolve, reject) => {
-    try {
-      console.log(`Simulating slow upload for ${file.name}`);
-
-      // Simulate progress updates
-      for (const progress of PROGRESS_STEPS) {
-        // Update progress
-        file.progress = progress;
-        console.log(`Upload progress for ${file.name}: ${progress}%`);
-
-        // Notify about progress
-        websocketService.updateUploadProgress(file.fileId, progress);
-
-        // Wait before next update
-        if (progress < 100) {
-          await new Promise((r) => setTimeout(r, STEP_DELAY));
-        }
-      }
-
-      // Mark as completed
-      file.status = "completed";
-      file.progress = 100;
-      websocketService.updateFileStatus(file.fileId, "completed");
-
-      resolve();
-    } catch (error) {
-      reject(error);
-    }
-  });
-};
-
 // Add this function to fetch file data from a URI
 const fetchFileData = async (uri: string): Promise<Blob> => {
   console.log(`Fetching file data from URI: ${uri}`);
@@ -812,7 +64,624 @@ const fetchFileData = async (uri: string): Promise<Blob> => {
       return blob;
     }
   } catch (error) {
-    console.error(`Error fetching file data from URI: ${uri}`, error);
+    console.error("Error fetching file data:", error);
     throw error;
   }
 };
+
+class UploadService {
+  uploadQueue: FileUpload[] = [];
+  activeUploads: Map<string, { task: any; file: FileUpload }> = new Map();
+  private maxConcurrentUploads = 3; // Allow 3 concurrent uploads
+  private serverUrl = "http://localhost:3000"; // Update with your server URL
+  private uploadListeners: Set<(queue: FileUpload[]) => void> = new Set();
+  private isProcessing: boolean = false;
+
+  // Add a lock mechanism to prevent race conditions
+  private queueLock: boolean = false;
+  private lockTimeout: number = 5000; // 5 seconds max lock time
+  private lockAcquiredTime: number = 0;
+
+  // Wait for the lock to be released
+  private async waitForLock(timeout = 1000): Promise<boolean> {
+    const startTime = Date.now();
+
+    // Auto-release lock if it's been held too long (deadlock prevention)
+    if (
+      this.queueLock &&
+      Date.now() - this.lockAcquiredTime > this.lockTimeout
+    ) {
+      console.warn("Force releasing lock due to timeout");
+      this.queueLock = false;
+    }
+
+    while (this.queueLock) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      if (Date.now() - startTime > timeout) {
+        console.warn("Lock wait timeout exceeded");
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Acquire the lock
+  private async acquireLock(): Promise<boolean> {
+    if (await this.waitForLock()) {
+      this.queueLock = true;
+      this.lockAcquiredTime = Date.now();
+      return true;
+    }
+    return false;
+  }
+
+  // Release the lock
+  private releaseLock() {
+    this.queueLock = false;
+  }
+
+  constructor() {
+    // Try to restore queue from storage on initialization
+    this.restoreQueue();
+
+    // Set up periodic queue state saving
+    setInterval(() => {
+      this.saveQueue();
+    }, 5000); // Save every 5 seconds
+  }
+
+  // Save queue state to storage
+  private saveQueue() {
+    try {
+      const queueToSave = this.uploadQueue.filter(
+        (file) =>
+          file.status !== "completed" ||
+          Date.now() - new Date(file.addedAt).getTime() < 24 * 60 * 60 * 1000
+      );
+
+      if (queueToSave.length > 0) {
+        console.log(
+          `📝 Saved queue state with ${queueToSave.length} active items`
+        );
+        localStorage.setItem("uploadQueue", JSON.stringify(queueToSave));
+      }
+    } catch (error) {
+      console.error("Error saving queue state:", error);
+    }
+  }
+
+  // Restore queue from storage
+  private restoreQueue() {
+    try {
+      const savedQueue = localStorage.getItem("uploadQueue");
+      if (savedQueue) {
+        const parsedQueue = JSON.parse(savedQueue) as FileUpload[];
+        if (Array.isArray(parsedQueue) && parsedQueue.length > 0) {
+          console.log(
+            `📝 Restored ${parsedQueue.length} items from saved queue`
+          );
+          this.uploadQueue = parsedQueue;
+
+          // Resume uploads for any files that were in progress
+          const filesToResume = parsedQueue.filter(
+            (file) => file.status === "uploading" || file.status === "queued"
+          );
+
+          if (filesToResume.length > 0) {
+            console.log(
+              `🔄 Resuming uploads for ${filesToResume.length} files`
+            );
+            setTimeout(() => this.processQueue(), 1000);
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Error restoring queue:", error);
+    }
+  }
+
+  async addToQueue(file: FileUpload): Promise<void> {
+    try {
+      if (!(await this.acquireLock())) {
+        console.error("Failed to acquire lock for adding to queue");
+        return;
+      }
+
+      // Check if file is already in queue
+      const existingIndex = this.uploadQueue.findIndex(
+        (f) => f.fileId === file.fileId
+      );
+
+      if (existingIndex !== -1) {
+        console.log(`File ${file.name} already in queue, updating`);
+        this.uploadQueue[existingIndex] = {
+          ...this.uploadQueue[existingIndex],
+          ...file,
+        };
+      } else {
+        console.log(`Adding file to queue: ${file.name}`);
+        this.uploadQueue.push(file);
+      }
+
+      this.notifyListeners();
+
+      if (!this.isProcessing) {
+        this.processQueue();
+      }
+    } finally {
+      this.releaseLock();
+    }
+  }
+
+  // Add multiple files to the queue
+  async addFilesToQueue(
+    files: Array<{ uri: string; name: string; size: number; type: string }>,
+    priority: "high" | "normal" | "low" = "normal"
+  ): Promise<FileUpload[]> {
+    try {
+      if (!(await this.acquireLock())) {
+        console.error("Failed to acquire lock for adding multiple files");
+        return [];
+      }
+
+      console.log(`Adding files to queue: ${files.length}`);
+
+      const filesToAdd: FileUpload[] = files.map((file) => ({
+        fileId: uuidv4(),
+        uri: file.uri,
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        status: "queued",
+        progress: 0,
+        priority: priority,
+        addedAt: new Date().toISOString(),
+        error: null,
+        retryCount: 0,
+      }));
+
+      // Add new files to the queue
+      this.uploadQueue = [...this.uploadQueue, ...filesToAdd];
+
+      console.log(`Queue after adding files: ${this.uploadQueue.length}`);
+
+      // Notify about the updated queue
+      this.notifyListeners();
+
+      // Start processing the queue if not already processing
+      if (!this.isProcessing) {
+        this.processQueue();
+      }
+
+      return filesToAdd;
+    } finally {
+      this.releaseLock();
+    }
+  }
+
+  // Remove a file from the queue
+  async removeFromQueue(fileId: string): Promise<boolean> {
+    try {
+      await this.waitForLock();
+      this.queueLock = true;
+      this.lockAcquiredTime = Date.now();
+
+      // Cancel the upload if it's active
+      if (this.activeUploads.has(fileId)) {
+        const { task } = this.activeUploads.get(fileId)!;
+        if (task && typeof task.cancel === "function") {
+          task.cancel();
+        }
+        this.activeUploads.delete(fileId);
+      }
+
+      // Remove from queue
+      const initialLength = this.uploadQueue.length;
+      this.uploadQueue = this.uploadQueue.filter(
+        (file) => file.fileId !== fileId
+      );
+
+      this.notifyListeners();
+      this.queueLock = false;
+
+      return this.uploadQueue.length < initialLength;
+    } catch (error) {
+      this.queueLock = false;
+      console.error("Error removing from queue:", error);
+      return false;
+    }
+  }
+
+  async processQueue(): Promise<void> {
+    if (!(await this.acquireLock())) {
+      console.error("Failed to acquire lock for processing queue");
+      return;
+    }
+
+    try {
+      if (this.isProcessing) {
+        return;
+      }
+
+      this.isProcessing = true;
+
+      // Process until no more files to upload or max concurrent uploads reached
+      while (
+        this.uploadQueue.length > 0 &&
+        this.activeUploads.size < this.maxConcurrentUploads
+      ) {
+        // Find the next file to upload (that isn't already being uploaded)
+        const nextFile = this.uploadQueue.find(
+          (file) =>
+            (file.status === "queued" || file.status === "failed") &&
+            !this.activeUploads.has(file.fileId)
+        );
+
+        if (!nextFile) {
+          console.log("No more files to upload in the queue");
+          break;
+        }
+
+        // Start uploading this file
+        nextFile.status = "uploading";
+        this.startUpload(nextFile);
+
+        // Update the queue and notify listeners
+        this.notifyListeners();
+      }
+    } finally {
+      this.isProcessing = false;
+      this.releaseLock();
+    }
+  }
+
+  // Start uploading a file
+  async startUpload(file: FileUpload) {
+    console.log(`Starting upload for ${file.name}...`);
+
+    try {
+      // Update file status to uploading
+      const fileIndex = this.uploadQueue.findIndex(
+        (f) => f.fileId === file.fileId
+      );
+      if (fileIndex !== -1) {
+        this.uploadQueue[fileIndex].status = "uploading";
+        this.uploadQueue[fileIndex].progress = 0;
+        this.notifyListeners();
+      } else {
+        console.error(`File ${file.name} not found in queue`);
+        return;
+      }
+
+      // Start the actual upload
+      await this.uploadFile(file);
+    } catch (error) {
+      console.error(`Error starting upload for ${file.name}:`, error);
+
+      // Update file status to failed
+      const fileIndex = this.uploadQueue.findIndex(
+        (f) => f.fileId === file.fileId
+      );
+      if (fileIndex !== -1) {
+        this.uploadQueue[fileIndex].status = "failed";
+        this.uploadQueue[fileIndex].error =
+          error instanceof Error ? error.message : String(error);
+        this.notifyListeners();
+      }
+
+      // Remove from active uploads
+      this.activeUploads.delete(file.fileId);
+
+      // Try to process the next file
+      this.processQueue();
+    }
+  }
+
+  // Update progress for a file
+  async updateProgress(fileId: string, progress: number) {
+    try {
+      if (!(await this.acquireLock())) {
+        return;
+      }
+
+      console.log(`📊 Updating progress for ${fileId}: ${progress}%`);
+
+      // Find the file in the queue
+      const fileIndex = this.uploadQueue.findIndex(
+        (file) => file.fileId === fileId
+      );
+
+      if (fileIndex !== -1) {
+        // Update progress
+        this.uploadQueue[fileIndex].progress = progress;
+
+        // Notify listeners
+        this.notifyListeners();
+      } else {
+        console.error(
+          `⚠️ Tried to update progress for file ${fileId} but it was not found in queue`
+        );
+
+        // Check if it's in active uploads but not in queue (race condition)
+        if (this.activeUploads.has(fileId)) {
+          console.error(
+            `File ${fileId} is marked as active but not found in queue! Attempting to restore it.`
+          );
+
+          // Get the file from active uploads and add it back to queue
+          const { file } = this.activeUploads.get(fileId)!;
+          file.progress = progress;
+
+          // Add it back to the queue
+          this.uploadQueue.push(file);
+          console.log(`⚠️ File was removed from queue, re-adding it`);
+
+          this.notifyListeners();
+        }
+      }
+    } finally {
+      this.releaseLock();
+    }
+  }
+
+  // Mark a file as complete
+  async completeUpload(fileId: string, downloadUrl?: string) {
+    try {
+      if (!(await this.acquireLock())) {
+        return;
+      }
+
+      console.log(`✅ Upload complete for: ${fileId}`);
+
+      // Find the file in the queue
+      const fileIndex = this.uploadQueue.findIndex(
+        (file) => file.fileId === fileId
+      );
+
+      if (fileIndex !== -1) {
+        // Update status and progress
+        this.uploadQueue[fileIndex].status = "completed";
+        this.uploadQueue[fileIndex].progress = 100;
+        if (downloadUrl) {
+          this.uploadQueue[fileIndex].downloadUrl = downloadUrl;
+        }
+
+        // Notify listeners
+        this.notifyListeners();
+      } else {
+        // Instead of just logging a warning, try to find the file in active uploads
+        if (this.activeUploads.has(fileId)) {
+          const { file } = this.activeUploads.get(fileId)!;
+          file.status = "completed";
+          file.progress = 100;
+          if (downloadUrl) {
+            file.downloadUrl = downloadUrl;
+          }
+
+          // Add it back to the queue
+          this.uploadQueue.push(file);
+
+          // Notify listeners
+          this.notifyListeners();
+        } else {
+          // Clean up the tracking if we can't restore it
+          console.warn(
+            `File ${fileId} not found in queue or active uploads when completing`
+          );
+        }
+      }
+
+      // Remove from active uploads
+      this.activeUploads.delete(fileId);
+
+      // Process the next file in queue
+      this.processQueue();
+    } finally {
+      this.releaseLock();
+    }
+  }
+
+  // Upload a file to Firebase Storage
+  async uploadFile(file: FileUpload): Promise<string> {
+    try {
+      console.log(`Starting upload for file: ${file.name}`);
+
+      // Fetch the file data
+      const fileData = await fetchFileData(file.uri);
+
+      // Create a reference to the file in Firebase Storage
+      const storageRef = ref(storage, `uploads/${file.fileId}/${file.name}`);
+
+      // Start the upload
+      const uploadTask = uploadBytesResumable(storageRef, fileData);
+
+      // Track the upload task
+      this.activeUploads.set(file.fileId, { task: uploadTask, file });
+
+      // Return a promise that resolves when the upload is complete
+      return new Promise((resolve, reject) => {
+        uploadTask.on(
+          "state_changed",
+          (snapshot) => {
+            // Calculate progress
+            const progress = Math.round(
+              (snapshot.bytesTransferred / snapshot.totalBytes) * 100
+            );
+
+            // Update progress
+            this.updateProgress(file.fileId, progress);
+          },
+          (error) => {
+            // Handle upload error
+            console.error(`Error uploading ${file.name}:`, error);
+
+            // Update file status to failed
+            const fileIndex = this.uploadQueue.findIndex(
+              (f) => f.fileId === file.fileId
+            );
+            if (fileIndex !== -1) {
+              this.uploadQueue[fileIndex].status = "failed";
+              this.uploadQueue[fileIndex].error = error.message;
+            }
+
+            // Remove from active uploads
+            this.activeUploads.delete(file.fileId);
+
+            // Notify listeners
+            this.notifyListeners();
+
+            // Reject the promise
+            reject(error);
+          },
+          async () => {
+            try {
+              // Upload completed successfully, get download URL
+              const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+
+              // Mark as complete
+              await this.completeUpload(file.fileId, downloadURL);
+
+              // Resolve the promise with the download URL
+              resolve(downloadURL);
+            } catch (urlError) {
+              console.error(
+                `Error getting download URL for ${file.name}:`,
+                urlError
+              );
+
+              // Update file status to failed
+              const fileIndex = this.uploadQueue.findIndex(
+                (f) => f.fileId === file.fileId
+              );
+              if (fileIndex !== -1) {
+                this.uploadQueue[fileIndex].status = "failed";
+                this.uploadQueue[fileIndex].error =
+                  urlError instanceof Error
+                    ? urlError.message
+                    : String(urlError);
+              }
+
+              reject(urlError);
+            }
+          }
+        );
+      });
+    } catch (error) {
+      console.error(`Error in uploadFile for ${file.name}:`, error);
+
+      // Update file status to failed with proper error handling
+      const fileIndex = this.uploadQueue.findIndex(
+        (f) => f.fileId === file.fileId
+      );
+      if (fileIndex !== -1) {
+        this.uploadQueue[fileIndex].status = "failed";
+        this.uploadQueue[fileIndex].error =
+          error instanceof Error ? error.message : String(error); // Convert to string if not an Error object
+      }
+
+      throw error;
+    }
+  }
+
+  // Notify all listeners of queue changes
+  private notifyListeners(): void {
+    this.uploadListeners.forEach((listener) => {
+      listener([...this.uploadQueue]);
+    });
+
+    // Also update the WebSocket service
+    websocketService.updateQueue(this.uploadQueue);
+  }
+
+  // Subscribe to queue changes
+  subscribeToQueue(callback: (queue: FileUpload[]) => void): () => void {
+    this.uploadListeners.add(callback);
+    callback([...this.uploadQueue]);
+
+    return () => {
+      this.uploadListeners.delete(callback);
+    };
+  }
+
+  // Add this method to the UploadService class
+  getQueue(): FileUpload[] {
+    return [...this.uploadQueue];
+  }
+
+  // Update priority of a file in the queue
+  async updatePriority(
+    fileId: string,
+    priority: "high" | "normal" | "low"
+  ): Promise<boolean> {
+    try {
+      await this.waitForLock();
+      this.queueLock = true;
+
+      const fileIndex = this.uploadQueue.findIndex(
+        (file) => file.fileId === fileId
+      );
+      if (fileIndex === -1) return false;
+
+      this.uploadQueue[fileIndex].priority = priority;
+      this.notifyListeners();
+      this.queueLock = false;
+      return true;
+    } catch (error) {
+      this.queueLock = false;
+      return false;
+    }
+  }
+
+  // Pause an upload
+  async pauseUpload(fileId: string): Promise<void> {
+    const upload = this.activeUploads.get(fileId);
+    if (upload?.task?.pause) {
+      upload.task.pause();
+
+      const fileIndex = this.uploadQueue.findIndex(
+        (file) => file.fileId === fileId
+      );
+      if (fileIndex !== -1) {
+        this.uploadQueue[fileIndex].status = "paused";
+        this.notifyListeners();
+      }
+    }
+  }
+
+  // Resume an upload
+  async resumeUpload(fileId: string): Promise<void> {
+    const upload = this.activeUploads.get(fileId);
+    if (upload?.task?.resume) {
+      upload.task.resume();
+
+      const fileIndex = this.uploadQueue.findIndex(
+        (file) => file.fileId === fileId
+      );
+      if (fileIndex !== -1) {
+        this.uploadQueue[fileIndex].status = "uploading";
+        this.notifyListeners();
+      }
+    }
+  }
+
+  // Cancel an upload
+  async cancelUpload(fileId: string): Promise<boolean> {
+    return this.removeFromQueue(fileId);
+  }
+
+  // Retry a failed upload
+  async retryUpload(fileId: string): Promise<boolean> {
+    const fileIndex = this.uploadQueue.findIndex(
+      (file) => file.fileId === fileId
+    );
+    if (fileIndex === -1) return false;
+
+    this.uploadQueue[fileIndex].status = "queued";
+    this.uploadQueue[fileIndex].error = null;
+    this.notifyListeners();
+    this.processQueue();
+    return true;
+  }
+}
+
+export default new UploadService();

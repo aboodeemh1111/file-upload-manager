@@ -103,11 +103,13 @@ export default function Index() {
   };
 
   const testAddToQueue = () => {
-    // Create a test file with a dummy URI
+    console.log("⬆️ ADDING TEST UPLOAD:", `test-${Date.now()}`);
+
+    // Create a test file
     const testFile = {
-      uri: "https://placekitten.com/200/300",
+      uri: `file:///test-${Date.now()}.jpg`,
       name: `test-file-${Date.now()}.jpg`,
-      size: 1024 * 1024, // 1MB
+      size: 1024 * 1024 * 2, // 2MB
       type: "image/jpeg",
     };
 
@@ -123,6 +125,7 @@ export default function Index() {
       priority: "normal",
       error: null,
       retryCount: 0,
+      addedAt: new Date().toISOString(),
     };
 
     console.log("⬆️ ADDING TEST UPLOAD:", fileUpload.fileId);
