@@ -634,43 +634,32 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
   };
 
   // Update the updateProgress function to properly handle video uploads
-  const updateProgress = (fileId: string, progress: number) => {
+  const updateProgress = useCallback((fileId: string, progress: number) => {
     console.log(`📊 Updating progress for ${fileId}: ${progress}%`);
 
-    // Check if file is in queue
-    const fileInQueue = uploadQueue.find((f) => f.fileId === fileId);
+    setUploadQueue((prevQueue) => {
+      const fileIndex = prevQueue.findIndex((file) => file.fileId === fileId);
 
-    if (!fileInQueue && progress < 100) {
-      console.log("⚠️ File was removed from queue, re-adding it");
-      // Try to find the file in the lastQueueRef
-      const lastFile = lastQueueRef.current?.find((f) => f.fileId === fileId);
-      if (lastFile) {
-        setUploadQueue((prev) => {
-          // Check if file is already in queue to prevent duplicates
-          if (prev.some((f) => f.fileId === fileId)) {
-            return prev.map((f) =>
-              f.fileId === fileId ? { ...f, progress, status: "uploading" } : f
-            );
-          }
-          // Otherwise add it back
-          return [...prev, { ...lastFile, progress, status: "uploading" }];
-        });
-        return;
+      // If file not found in queue, don't try to re-add it
+      if (fileIndex === -1) {
+        console.log(
+          `⚠️ File ${fileId} not found in queue, skipping progress update`
+        );
+        return prevQueue;
       }
-    }
 
-    setUploadQueue((prev) => {
-      return prev.map((file) =>
-        file.fileId === fileId
-          ? {
-              ...file,
-              progress,
-              status: progress === 100 ? "completed" : "uploading",
-            }
-          : file
-      );
+      // Create a new array with the updated file
+      const newQueue = [...prevQueue];
+      newQueue[fileIndex] = {
+        ...newQueue[fileIndex],
+        progress,
+        status: progress < 100 ? "uploading" : "completed",
+        completedAt: progress === 100 ? Date.now() : undefined,
+      };
+
+      return newQueue;
     });
-  };
+  }, []);
 
   // Add useEffect to update lastQueueRef when uploadQueue changes
   useEffect(() => {

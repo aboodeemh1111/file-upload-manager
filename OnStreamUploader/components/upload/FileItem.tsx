@@ -123,6 +123,8 @@ const FileItem: React.FC<FileItemProps> = ({
   });
 
   const getFileIcon = () => {
+    if (!file || !file.type) return "document"; // Default icon for undefined type
+
     const type = file.type.split("/")[0];
 
     if (type === "image") return "image";
@@ -133,6 +135,8 @@ const FileItem: React.FC<FileItemProps> = ({
   };
 
   const getIconColor = () => {
+    if (!file || !file.type) return colors.tint; // Default color if file or type is undefined
+
     const type = file.type.split("/")[0];
 
     if (type === "image") return colors.success;
@@ -205,6 +209,14 @@ const FileItem: React.FC<FileItemProps> = ({
 
   const fileItemRef = useRef(null);
 
+  // Add a safety check at the beginning of the component
+  if (!file) {
+    return null; // Don't render anything if file is undefined
+  }
+
+  // Add a fallback for undefined name when displaying
+  const displayName = file.name || "Unknown file";
+
   return (
     <PanGestureHandler
       ref={fileItemRef}
@@ -231,7 +243,7 @@ const FileItem: React.FC<FileItemProps> = ({
 
             <View style={styles.fileDetails}>
               <ThemedText style={styles.fileName} numberOfLines={1}>
-                {file.name}
+                {displayName}
               </ThemedText>
 
               <View style={styles.fileMetaRow}>
