@@ -282,6 +282,20 @@ class WebSocketService {
       progress,
     });
   }
+
+  // Add this method to your WebSocketService class
+  updateQueue(queue: FileUpload[]): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(
+        JSON.stringify({
+          type: "update_queue",
+          queue,
+        })
+      );
+    } else {
+      console.warn("WebSocket not connected, cannot update queue");
+    }
+  }
 }
 
 export default new WebSocketService();

@@ -68,12 +68,21 @@ class UploadService {
       status: "queued" as const,
       progress: 0,
       priority,
+      createdAt: new Date().toISOString(),
       error: null,
       retryCount: 0,
     }));
 
+    // Add files to the queue
     this.uploadQueue = [...this.uploadQueue, ...newFiles];
 
+    // Log the queue state for debugging
+    console.log(`Queue after adding files: ${this.uploadQueue.length}`);
+
+    // Notify listeners about the updated queue
+    websocketService.updateQueue(this.uploadQueue);
+
+    // Start processing the queue if not already uploading
     if (!this.isUploading) {
       this.processQueue();
     }
@@ -212,6 +221,18 @@ class UploadService {
             // Only update progress if it's higher than what we've seen before
             if (progress > highestProgress) {
               highestProgress = progress;
+
+              // Update the file in the queue
+              const fileIndex = this.uploadQueue.findIndex(
+                (f) => f.fileId === file.fileId
+              );
+              if (fileIndex !== -1) {
+                this.uploadQueue[fileIndex].progress = progress;
+
+                // Notify about the updated queue
+                websocketService.updateQueue(this.uploadQueue);
+              }
+
               // Call the onProgress callback if provided
               if (options?.onProgress) {
                 options.onProgress(progress);
@@ -220,6 +241,20 @@ class UploadService {
           },
           (error) => {
             console.error(`Error in uploadFile for ${file.name}:`, error);
+
+            // Update file status in queue
+            const fileIndex = this.uploadQueue.findIndex(
+              (f) => f.fileId === file.fileId
+            );
+            if (fileIndex !== -1) {
+              this.uploadQueue[fileIndex].status = "failed";
+              this.uploadQueue[fileIndex].error =
+                error.message || String(error);
+
+              // Notify about the updated queue
+              websocketService.updateQueue(this.uploadQueue);
+            }
+
             if (options?.onError) {
               options.onError(error as Error);
             }
@@ -227,6 +262,18 @@ class UploadService {
           },
           async () => {
             console.log(`Firebase upload completed for ${file.name}`);
+
+            // Update file status in queue
+            const fileIndex = this.uploadQueue.findIndex(
+              (f) => f.fileId === file.fileId
+            );
+            if (fileIndex !== -1) {
+              this.uploadQueue[fileIndex].status = "completed";
+              this.uploadQueue[fileIndex].progress = 100;
+
+              // Notify about the updated queue
+              websocketService.updateQueue(this.uploadQueue);
+            }
 
             // Get download URL
             const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
