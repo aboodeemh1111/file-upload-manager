@@ -71,6 +71,7 @@ const fetchFileData = async (uri: string): Promise<Blob> => {
 
 class UploadService {
   uploadQueue: FileUpload[] = [];
+  completedUploads: FileUpload[] = [];
   activeUploads: Map<string, { task: any; file: FileUpload }> = new Map();
   private maxConcurrentUploads = 3; // Allow 3 concurrent uploads
   private serverUrl = "http://localhost:3000"; // Update with your server URL
@@ -591,22 +592,33 @@ class UploadService {
     }
   }
 
-  // Upload a file to Firebase Storage
+  // Modify the uploadFile method to use the correct property name
   async uploadFile(file: FileUpload): Promise<void> {
     try {
       console.log(`Starting upload for file: ${file.name}`);
 
-      // Add to stable IDs to prevent flickering
-      this.stableIds.add(file.fileId);
+      // Mark file as uploading
+      const fileIndex = this.uploadQueue.findIndex(
+        (item) => item.fileId === file.fileId
+      );
 
-      // Get file data
-      const fileData = await fetchFileData(file.uri);
-      if (!fileData) {
-        throw new Error("Failed to fetch file data");
+      if (fileIndex !== -1) {
+        this.uploadQueue[fileIndex].status = "uploading";
+        this.notifyListeners();
       }
 
-      // Create a reference to the file in Firebase Storage
-      const storageRef = ref(storage, `uploads/${file.fileId}/${file.name}`);
+      // Get file data
+      let fileData: Blob;
+      try {
+        fileData = await fetchFileData(file.uri);
+      } catch (error) {
+        console.error(`Error fetching file data for ${file.name}:`, error);
+        this.handleUploadError(file.fileId, "Failed to read file data");
+        return;
+      }
+
+      // Create a storage reference
+      const storageRef = ref(storage, `uploads/${file.name}`);
 
       // Create upload task
       const uploadTask = uploadBytesResumable(storageRef, fileData);
@@ -617,68 +629,120 @@ class UploadService {
         task: uploadTask,
       });
 
-      // Set up progress monitoring
+      // Add to stable IDs to prevent flickering
+      this.stableIds.add(file.fileId);
+
+      // For video files, we need to manually track progress since the events may not fire frequently
+      const isVideo = file.name.match(/\.(mp4|mov|avi|wmv|flv|webm|mkv)$/i);
+
+      // Declare progressInterval outside the if block so it's in scope for the cleanup
+      let progressInterval: NodeJS.Timeout | null = null;
+
+      if (isVideo) {
+        // Set up manual progress tracking for videos
+        let lastProgress = 0;
+        progressInterval = setInterval(() => {
+          if (uploadTask.snapshot) {
+            const progress = Math.round(
+              (uploadTask.snapshot.bytesTransferred /
+                uploadTask.snapshot.totalBytes) *
+                100
+            );
+
+            // Only update if progress has changed
+            if (progress !== lastProgress) {
+              lastProgress = progress;
+              this.updateProgress(file.fileId, progress);
+
+              // If upload is complete, clear the interval
+              if (progress >= 100 && progressInterval) {
+                clearInterval(progressInterval as NodeJS.Timeout);
+                progressInterval = null;
+              }
+            }
+          }
+        }, 500);
+      }
+
+      // Listen for state changes
       uploadTask.on(
         "state_changed",
         (snapshot) => {
+          // Calculate progress
           const progress = Math.round(
             (snapshot.bytesTransferred / snapshot.totalBytes) * 100
           );
 
-          // Update progress in the queue with proper locking
+          // Update progress in the queue
           this.updateProgress(file.fileId, progress);
         },
         (error) => {
           // Handle errors
           console.error(`Upload error for ${file.name}:`, error);
+          this.handleUploadError(file.fileId, error.message || "Upload failed");
 
-          try {
-            this.acquireLock();
-
-            const fileIndex = this.uploadQueue.findIndex(
-              (item) => item.fileId === file.fileId
-            );
-
-            if (fileIndex !== -1) {
-              this.uploadQueue[fileIndex].status = "failed";
-              this.uploadQueue[fileIndex].error =
-                error instanceof Error ? error.message : String(error);
-              this.notifyListeners();
-            }
-
-            this.queueLock = false;
-          } catch (lockError) {
-            this.queueLock = false;
-            console.error("Lock error:", lockError);
+          // Clear interval if it was a video
+          if (isVideo && progressInterval !== null) {
+            clearInterval(progressInterval as NodeJS.Timeout);
           }
         },
         async () => {
-          // Upload completed successfully
           try {
-            // Get download URL
+            // Upload completed successfully
             const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
 
-            // Complete the upload
-            await this.completeUpload(file.fileId, downloadURL);
+            // Ensure 100% progress
+            this.updateProgress(file.fileId, 100);
+
+            console.log(`✅ Upload complete for: ${file.fileId}`);
+
+            // Notify server about the completed upload
+            websocketService.sendMessage({
+              type: "upload_complete",
+              fileId: file.fileId,
+              fileName: file.name,
+              downloadURL,
+            });
+
+            // Process next file in queue
+            this.processQueue();
+
+            // Clear interval if it was a video
+            if (isVideo && progressInterval !== null) {
+              clearInterval(progressInterval as NodeJS.Timeout);
+            }
+
+            // Move to completed uploads after a short delay
+            setTimeout(() => {
+              // Check if the file is still in the queue (hasn't been removed)
+              const currentFileIndex = this.uploadQueue.findIndex(
+                (file) => file.fileId === file.fileId
+              );
+
+              if (currentFileIndex !== -1) {
+                // Move to completed uploads
+                const completedFile = this.uploadQueue[currentFileIndex];
+                this.completedUploads.push(completedFile);
+
+                // Remove from queue
+                this.uploadQueue.splice(currentFileIndex, 1);
+
+                // Notify listeners about the update
+                this.notifyListeners();
+              }
+            }, 1000); // 1 second delay
           } catch (error) {
-            console.error(`Error completing upload for ${file.name}:`, error);
+            console.error(
+              `Error getting download URL for ${file.name}:`,
+              error
+            );
+            this.handleUploadError(file.fileId, "Failed to get download URL");
           }
         }
       );
     } catch (error) {
-      console.error(`Upload failed for ${file.name}:`, error);
-
-      // Update file status to failed
-      const fileIndex = this.uploadQueue.findIndex(
-        (item) => item.fileId === file.fileId
-      );
-
-      if (fileIndex !== -1) {
-        this.uploadQueue[fileIndex].status = "failed";
-        this.uploadQueue[fileIndex].error =
-          error instanceof Error ? error.message : String(error);
-        this.notifyListeners();
-      }
+      console.error(`Error starting upload for ${file.name}:`, error);
+      this.handleUploadError(file.fileId, "Failed to start upload");
     }
   }
 
@@ -780,6 +844,28 @@ class UploadService {
     this.notifyListeners();
     this.processQueue();
     return true;
+  }
+
+  // Add this method to handle upload errors
+  private handleUploadError(fileId: string, errorMessage: string): void {
+    // Find the file in the queue
+    const fileIndex = this.uploadQueue.findIndex(
+      (file) => file.fileId === fileId
+    );
+
+    if (fileIndex !== -1) {
+      // Update the file status and error message
+      this.uploadQueue[fileIndex].status = "failed";
+      this.uploadQueue[fileIndex].error = errorMessage;
+
+      // Remove from processing files set
+      this.processingFiles.delete(fileId);
+
+      // Notify listeners about the update
+      this.notifyListeners();
+
+      console.error(`Upload failed for file ${fileId}: ${errorMessage}`);
+    }
   }
 }
 
