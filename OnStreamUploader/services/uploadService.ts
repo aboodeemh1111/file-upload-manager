@@ -354,10 +354,37 @@ class UploadService {
   }
 
   updateProgress(fileId: string, progress: number) {
-    const file = this.uploadQueue.find((f) => f.fileId === fileId);
-    if (file) {
-      file.progress = progress;
+    console.log(`📊 Updating progress for ${fileId}: ${progress}%`);
+
+    // Find the file in the queue
+    const fileIndex = this.uploadQueue.findIndex(
+      (file) => file.fileId === fileId
+    );
+
+    if (fileIndex === -1) {
+      console.warn("⚠️ File was removed from queue, re-adding it");
+      // Instead of re-adding the file, we should just ignore progress updates for files not in the queue
+      return; // Add this return to prevent re-adding files that were removed
     }
+
+    // Update the progress
+    const updatedQueue = [...this.uploadQueue];
+    updatedQueue[fileIndex] = {
+      ...updatedQueue[fileIndex],
+      progress,
+      status: progress === 100 ? "completed" : "uploading",
+    };
+
+    // Update the queue
+    this.uploadQueue = updatedQueue;
+
+    // Update the last queue ref for React to detect changes
+    console.log(
+      `📝 Updated lastQueueRef with current queue: ${this.uploadQueue.length} items`
+    );
+
+    // Notify about the updated queue
+    websocketService.updateQueue(this.uploadQueue);
   }
 
   completeUpload(fileId: string) {
