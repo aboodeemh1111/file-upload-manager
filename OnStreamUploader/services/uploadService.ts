@@ -129,8 +129,19 @@ class UploadService {
       websocketService.requestUpload(this.currentUpload);
 
       // Start the actual file upload
-      await this.uploadFile(new Blob([this.currentUpload.uri]), {
-        fileId: this.currentUpload.fileId,
+      await this.uploadFile(this.currentUpload, {
+        onProgress: (progress) => {
+          this.currentUpload!.progress = progress;
+          websocketService.updateUploadProgress(
+            this.currentUpload!.fileId,
+            progress
+          );
+        },
+        onError: (error) => {
+          this.currentUpload!.status = "failed";
+          this.currentUpload!.error =
+            error instanceof Error ? error.message : String(error);
+        },
       });
     } catch (error: unknown) {
       console.error("Upload failed:", error);
@@ -163,33 +174,80 @@ class UploadService {
     }
   }
 
-  async uploadFile(file: File | Blob, options: any = {}) {
-    return new Promise((resolve, reject) => {
-      // Simulate upload progress
-      let progress = 0;
-      const interval = setInterval(() => {
-        progress += 10;
+  async uploadFile(
+    file: FileUpload,
+    options?: {
+      onProgress?: (progress: number) => void;
+      onError?: (error: Error) => void;
+    }
+  ): Promise<any> {
+    console.log(`Starting upload for ${file.name} to Firebase`);
 
-        // Notify about progress
-        websocketService.notifyListeners("upload_progress", {
-          fileId: options.fileId,
-          progress,
-          loaded: (progress * file.size) / 100,
-          total: file.size,
-        });
+    try {
+      // Get file data
+      const fileData = await fetchFileData(file.uri);
 
-        if (progress >= 100) {
-          clearInterval(interval);
-          resolve({
-            success: true,
-            url: "https://example.com/mock-upload-url",
-            name: "name" in file ? file.name : "uploaded-file",
-            size: file.size,
-            type: file.type,
-          });
-        }
-      }, 500);
-    });
+      // Create a reference to the file in Firebase Storage
+      const storageRef = ref(storage, `uploads/${file.fileId}/${file.name}`);
+
+      // Create upload task
+      const uploadTask = uploadBytesResumable(storageRef, fileData);
+
+      return new Promise((resolve, reject) => {
+        // Track the highest progress value we've seen
+        let highestProgress = 0;
+
+        uploadTask.on(
+          "state_changed",
+          (snapshot) => {
+            // Calculate upload progress
+            const progress = Math.round(
+              (snapshot.bytesTransferred / snapshot.totalBytes) * 100
+            );
+
+            console.log(
+              `Firebase upload progress for ${file.name}: ${progress}%`
+            );
+
+            // Only update progress if it's higher than what we've seen before
+            if (progress > highestProgress) {
+              highestProgress = progress;
+              // Call the onProgress callback if provided
+              if (options?.onProgress) {
+                options.onProgress(progress);
+              }
+            }
+          },
+          (error) => {
+            console.error(`Error in uploadFile for ${file.name}:`, error);
+            if (options?.onError) {
+              options.onError(error as Error);
+            }
+            reject(error);
+          },
+          async () => {
+            console.log(`Firebase upload completed for ${file.name}`);
+
+            // Get download URL
+            const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+
+            // Return file info
+            resolve({
+              url: downloadURL,
+              size: uploadTask.snapshot.totalBytes,
+              type: file.type,
+              name: file.name,
+            });
+          }
+        );
+      });
+    } catch (error) {
+      console.error(`Error in uploadFile for ${file.name}:`, error);
+      if (options?.onError) {
+        options.onError(error as Error);
+      }
+      throw error;
+    }
   }
 
   pauseUpload(fileId: string) {
@@ -294,56 +352,61 @@ export const uploadFile = async (
     onProgress?: (progress: number) => void;
     onError?: (error: Error) => void;
   }
-) => {
+): Promise<any> => {
+  console.log(`Starting upload for ${file.name} to Firebase`);
+
   try {
-    console.log(`Starting upload for ${file.name} to Firebase`);
+    // Get file data
+    const fileData = await fetchFileData(file.uri);
 
     // Create a reference to the file in Firebase Storage
-    const storageRef = ref(storage, `uploads/chunks/${file.fileId}-chunk-0`);
+    const storageRef = ref(storage, `uploads/${file.fileId}/${file.name}`);
 
-    // Create the upload task
-    const uploadTask = uploadBytesResumable(
-      storageRef,
-      await fetchFileData(file.uri)
-    );
+    // Create upload task
+    const uploadTask = uploadBytesResumable(storageRef, fileData);
 
-    // Set up progress monitoring
     return new Promise((resolve, reject) => {
+      // Track the highest progress value we've seen
+      let highestProgress = 0;
+
       uploadTask.on(
         "state_changed",
         (snapshot) => {
-          // Calculate and report progress
+          // Calculate upload progress
           const progress = Math.round(
             (snapshot.bytesTransferred / snapshot.totalBytes) * 100
           );
+
           console.log(
             `Firebase upload progress for ${file.name}: ${progress}%`
           );
 
-          // Call the onProgress callback if provided
-          if (options?.onProgress) {
-            options.onProgress(progress);
+          // Only update progress if it's higher than what we've seen before
+          if (progress > highestProgress) {
+            highestProgress = progress;
+            // Call the onProgress callback if provided
+            if (options?.onProgress) {
+              options.onProgress(progress);
+            }
           }
         },
         (error) => {
-          // Handle errors
-          console.error(`Firebase upload error for ${file.name}:`, error);
+          console.error(`Error in uploadFile for ${file.name}:`, error);
           if (options?.onError) {
-            options.onError(error);
+            options.onError(error as Error);
           }
           reject(error);
         },
         async () => {
-          // Upload completed successfully
           console.log(`Firebase upload completed for ${file.name}`);
 
-          // Get the download URL
+          // Get download URL
           const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
 
-          // Return the result
+          // Return file info
           resolve({
             url: downloadURL,
-            size: file.size,
+            size: uploadTask.snapshot.totalBytes,
             type: file.type,
             name: file.name,
           });
@@ -542,7 +605,17 @@ const processQueue = async () => {
     if (SIMULATE_SLOW_UPLOAD) {
       await simulateSlowUpload(nextFile);
     } else {
-      await uploadFile(nextFile);
+      await uploadFile(nextFile, {
+        onProgress: (progress) => {
+          nextFile.progress = progress;
+          websocketService.updateUploadProgress(nextFile.fileId, progress);
+        },
+        onError: (error) => {
+          nextFile.status = "failed";
+          nextFile.error =
+            error instanceof Error ? error.message : String(error);
+        },
+      });
     }
 
     // Continue with next file
