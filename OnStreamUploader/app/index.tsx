@@ -14,6 +14,7 @@ import { useColorScheme } from "@/components/useColorScheme";
 import { ThemedView } from "@/components/ThemedView";
 import { ThemedText } from "@/components/ThemedText";
 import { FileUpload } from "@/types/FileUpload";
+import * as Sentry from "@sentry/react-native";
 
 export default function Index() {
   const {
@@ -84,6 +85,18 @@ export default function Index() {
               >
                 <Ionicons name="bug" size={24} color="white" />
                 <Text style={styles.buttonText}>Test Upload</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.button, { backgroundColor: colors.warning }]}
+                onPress={() => {
+                  Sentry.captureMessage("Test message from OnStreamUploader");
+                  // To test error reporting:
+                  // throw new Error("Test error from OnStreamUploader");
+                }}
+              >
+                <Ionicons name="bug" size={24} color="white" />
+                <Text style={styles.buttonText}>Test Sentry</Text>
               </TouchableOpacity>
             </View>
           </>

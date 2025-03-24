@@ -1,16 +1,21 @@
 export interface FileUpload {
-  fileId: string;
-  uri: string;
+  id?: string;
   name: string;
-  size: number;
+  uri: string;
   type: string;
-  status: "uploading" | "completed" | "queued" | "paused" | "failed" | "error";
+  size: number;
   progress: number;
-  priority: "high" | "normal" | "low";
-  error: string | null;
-  retryCount: number;
+  status: "queued" | "uploading" | "completed" | "failed" | "paused";
+  downloadUrl?: string;
+  error?: string | null;
+  createdAt?: number;
+  updatedAt?: number;
+  fileId: string;
+
+  // Optional fields for backward compatibility
+  priority?: "high" | "normal" | "low";
+  retryCount?: number;
   completedAt?: number;
   startedAt?: number;
-  addedAt: string;
-  downloadUrl?: string;
+  addedAt?: string;
 }

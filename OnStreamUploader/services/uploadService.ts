@@ -11,6 +11,7 @@ import {
 } from "firebase/storage";
 import { storage } from "../config/firebase";
 import { Platform } from "react-native";
+import * as Sentry from "@sentry/react-native";
 
 // Add this function to fetch file data from a URI
 const fetchFileData = async (uri: string): Promise<Blob> => {
@@ -141,42 +142,48 @@ class UploadService {
   // Save queue state to storage
   private saveQueue(): void {
     try {
-      // Only save active uploads to reduce storage size
-      const activeUploads = this.uploadQueue.filter(
-        (file) => file.status === "uploading" || file.status === "queued"
-      );
+      // Before saving, strip out any large data properties like file data/uri
+      const storableQueue = this.uploadQueue.map((item) => ({
+        id: item.fileId,
+        name: item.name,
+        status: item.status,
+        progress: item.progress,
+        size: item.size,
+        type: item.type,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+      }));
 
-      // If there are too many items, only save the most recent ones
-      const itemsToSave =
-        activeUploads.length > 10 ? activeUploads.slice(-10) : activeUploads;
-
-      // Serialize and save
-      const queueData = JSON.stringify(itemsToSave);
-      localStorage.setItem("uploadQueue", queueData);
-
+      localStorage.setItem("uploadQueue", JSON.stringify(storableQueue));
       console.log(
-        `📝 Saved queue state with ${itemsToSave.length} active items`
+        "📝 Saved queue state with",
+        this.uploadQueue.filter((item) => item.status === "uploading").length,
+        "active items"
       );
-    } catch (error) {
-      console.error("Error saving queue state:", error);
-
-      // If quota exceeded, try to clear some space
+    } catch (error: unknown) {
       if (
-        error instanceof DOMException &&
+        error &&
+        typeof error === "object" &&
+        "name" in error &&
         error.name === "QuotaExceededError"
       ) {
+        // Try to save an even more minimal version
         try {
-          // Remove old data
-          localStorage.removeItem("uploadQueue");
-          // Try with fewer items
-          const minimalQueue = this.uploadQueue
-            .filter((file) => file.status === "uploading")
-            .slice(-5);
+          const minimalQueue = this.uploadQueue.map((item) => ({
+            id: item.fileId,
+            name: item.name,
+            status: item.status,
+            progress: item.progress,
+          }));
           localStorage.setItem("uploadQueue", JSON.stringify(minimalQueue));
-          console.log("Saved minimal queue after quota error");
-        } catch (e) {
-          console.error("Failed to save even minimal queue:", e);
+        } catch (innerError) {
+          // If that fails too, just log the error
+          Sentry.captureException(innerError);
+          console.error("Failed to save even minimal queue:", innerError);
         }
+      } else {
+        Sentry.captureException(error);
+        console.error("Error saving queue state:", error);
       }
     }
   }
@@ -860,6 +867,19 @@ class UploadService {
 
       // Remove from processing files set
       this.processingFiles.delete(fileId);
+
+      // Report to Sentry with context
+      Sentry.captureException(new Error(`Upload failed: ${errorMessage}`), {
+        extra: {
+          fileId,
+          fileName: this.uploadQueue[fileIndex].name,
+          fileSize: this.uploadQueue[fileIndex].size,
+          fileType: this.uploadQueue[fileIndex].type,
+        },
+        tags: {
+          uploadError: true,
+        },
+      });
 
       // Notify listeners about the update
       this.notifyListeners();

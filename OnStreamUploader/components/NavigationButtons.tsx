@@ -28,7 +28,7 @@ export default function NavigationButtons() {
           <TouchableOpacity
             key={route.path}
             style={styles.tabButton}
-            onPress={() => router.navigate(route.path)}
+            onPress={() => router.navigate(route.path as any)}
           >
             <IconSymbol
               name={route.icon}

@@ -7,6 +7,9 @@ import { ThemedText } from "../ThemedText";
 import Colors from "@/constants/Colors";
 import { useColorScheme } from "@/components/useColorScheme";
 import { FileUpload } from "@/types/FileUpload";
+import * as Progress from "react-native-progress";
+import { Ionicons } from "@expo/vector-icons";
+import { formatFileSize } from "@/utils/formatFileSize";
 
 const UploadQueue = () => {
   const {
@@ -195,6 +198,51 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 16,
     opacity: 0.7,
+  },
+  fileItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 16,
+  },
+  fileInfo: {
+    flex: 1,
+  },
+  fileName: {
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  fileSize: {
+    fontSize: 14,
+    opacity: 0.7,
+  },
+  progressContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 8,
+  },
+  completedContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 8,
+  },
+  completedText: {
+    fontSize: 14,
+    fontWeight: "600",
+    marginLeft: 8,
+  },
+  errorContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 8,
+  },
+  errorText: {
+    fontSize: 14,
+    fontWeight: "600",
+    marginLeft: 8,
+  },
+  progressText: {
+    fontSize: 14,
+    marginLeft: 8,
   },
 });
 

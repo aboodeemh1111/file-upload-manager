@@ -18,6 +18,7 @@ import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { v4 as uuidv4 } from "uuid";
 import { Platform } from "react-native";
+import * as Sentry from "@sentry/react-native";
 
 interface UploadContextType {
   uploadQueue: FileUpload[];
@@ -272,6 +273,18 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
       files: Array<{ uri: string; name: string; size: number; type: string }>,
       priority: "high" | "normal" | "low" = "normal"
     ) => {
+      // Add a breadcrumb for debugging
+      Sentry.addBreadcrumb({
+        category: "upload",
+        message: `Adding ${files.length} files to queue`,
+        level: "info",
+        data: {
+          fileCount: files.length,
+          priority,
+          fileTypes: files.map((f) => f.type).join(","),
+        },
+      });
+
       console.log("Adding files to queue:", files.length);
 
       const newFiles: FileUpload[] = files.map((file) => {
@@ -500,7 +513,7 @@ export const UploadProvider: React.FC<{ children: ReactNode }> = ({
       websocketService.updateQueueOrder(
         newQueue.map((f) => ({
           fileId: f.fileId,
-          priority: f.priority,
+          priority: f.priority || "normal",
         }))
       );
 
