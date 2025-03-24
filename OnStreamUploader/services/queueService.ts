@@ -54,6 +54,14 @@ function dataURItoBlob(dataURI: string): Promise<Blob> {
   });
 }
 
+const isLocalStorageAvailable = () => {
+  try {
+    return typeof window !== "undefined" && window.localStorage !== undefined;
+  } catch (e) {
+    return false;
+  }
+};
+
 const queueService = {
   queue: [] as FileUpload[],
 
@@ -84,6 +92,12 @@ const queueService = {
   // Modify your saveQueue method to handle quota errors
   saveQueue() {
     try {
+      // Check if localStorage is available
+      if (!isLocalStorageAvailable()) {
+        console.log("localStorage not available, skipping queue save");
+        return;
+      }
+
       // Create a serializable version of the queue
       const serializableQueue = this.queue.map((item) => ({
         id: item.id,
@@ -109,6 +123,12 @@ const queueService = {
 
   loadQueue() {
     try {
+      // Check if localStorage is available
+      if (!isLocalStorageAvailable()) {
+        console.log("localStorage not available, skipping queue load");
+        return;
+      }
+
       const savedQueue = localStorage.getItem("uploadQueue");
       if (savedQueue) {
         this.queue = JSON.parse(savedQueue);

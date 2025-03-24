@@ -13,6 +13,15 @@ import { storage } from "../config/firebase";
 import { Platform } from "react-native";
 import * as Sentry from "@sentry/react-native";
 
+// Add this helper function at the top of the file
+const isLocalStorageAvailable = () => {
+  try {
+    return typeof window !== "undefined" && window.localStorage !== undefined;
+  } catch (e) {
+    return false;
+  }
+};
+
 // Add this function to fetch file data from a URI
 const fetchFileData = async (uri: string): Promise<Blob> => {
   console.log(`Fetching file data from URI: ${uri}`);
@@ -142,6 +151,11 @@ class UploadService {
   // Save queue state to storage
   private saveQueue(): void {
     try {
+      if (!isLocalStorageAvailable()) {
+        console.log("localStorage not available, skipping queue save");
+        return;
+      }
+
       // Before saving, strip out any large data properties like file data/uri
       const storableQueue = this.uploadQueue.map((item) => ({
         id: item.fileId,
@@ -191,6 +205,11 @@ class UploadService {
   // Restore queue from storage
   private restoreQueue() {
     try {
+      if (!isLocalStorageAvailable()) {
+        console.log("localStorage not available, skipping queue load");
+        return;
+      }
+
       const savedQueue = localStorage.getItem("uploadQueue");
       if (savedQueue) {
         const parsedQueue = JSON.parse(savedQueue) as FileUpload[];
